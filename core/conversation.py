@@ -6,6 +6,8 @@ from html.parser import HTMLParser
 
 from config.settings import ConfigManager
 from .graph import EntityGraph
+from .image_analyzer import ImageAnalyzer
+from prompts.templates import ConversationPrompts
 from utils.logging import get_logger
 
 class ThinkParser(HTMLParser):
@@ -106,7 +108,13 @@ class LongConversation(BaseConversation):
         self.entire_messages: List[BaseMessage] = []
         self.think_history: List[Dict[str, Any]] = []
         self.message_reserve_turns: int = 2  # Number of turns to reserve in history
-        
+
+        # Initialize image analyzer for medical image analysis
+        self.image_analyzer = ImageAnalyzer(verbose=False)
+
+        # Initialize conversation prompts for image analysis
+        self.conv_prompts = ConversationPrompts()
+
         self._ensure_working_directory()
     
     def _ensure_working_directory(self):
@@ -178,18 +186,37 @@ class LongConversation(BaseConversation):
         """Get the number of turns in the conversation"""
         return len(self.messages) // 2
     
-    def conversation(self, human_message: str):
-        """Process a conversation turn and return AI response"""
+    def conversation(
+        self,
+        human_message: str,
+        images: Optional[List[str]] = None
+    ):
+        """
+        Process a conversation turn and return AI response.
+
+        Args:
+            human_message: User's text message
+            images: Optional list of base64-encoded images for analysis
+
+        Returns:
+            Tuple of (response_content, accomplish, log_messages)
+        """
         log_messages = []
         # self.logger.info("Processing conversation turn...")
         log_messages.append("Processing conversation turn...")
-        
-        # Get the last AI message for context
+
+        # If images provided, analyze them first and enhance the message
+        if images and self.image_analyzer.is_available():
+            human_message, image_logs = self._analyze_images(human_message, images)
+            log_messages.extend(image_logs)
+
+        # Continue with normal conversation flow
         query_message = self.messages[-1].content if self.messages else ""
-        
+
         # Update graph with new information
-        # self.logger.info("Updating graph with new information...")
-        update_log_messages = self.plan_graph.accept_message(self.current_hint, query_message, human_message)
+        update_log_messages = self.plan_graph.accept_message(
+            self.current_hint, query_message, human_message, is_image_report=images is not None and len(images) > 0
+        )
         log_messages.extend(update_log_messages)
         
         # Get new hint
@@ -242,8 +269,63 @@ class LongConversation(BaseConversation):
             # self.logger.info("Conversation goal accomplished!")
             log_messages.append("Conversation goal accomplished!")
 
-        # return response content, accomplishment status, and log messages
         return response_content, self.plan_graph.accomplish, log_messages
+
+
+    def _analyze_images(self, human_message: str, images: List[str]) -> Tuple[str, List[str]]:
+        """
+        Analyze images and enhance human message with analysis report.
+
+        This method provides graph context to the VLM by serializing nodes with values,
+        then combines the analysis report with the user's message.
+
+        Args:
+            human_message: User's text message
+            images: List of base64-encoded images
+
+        Returns:
+            Tuple of (enhanced_message, log_messages)
+        """
+        log_messages = []
+        log_messages.append(f"Processing {len(images)} image(s) with VLM...")
+
+        # Get graph context for image analysis
+        graph_context = self.plan_graph._serialize_nodes_with_value(self.plan_graph.entity_graph)
+        log_messages.append(f"Retrieved graph context: {len(graph_context)} chars")
+
+        # Build analysis query using template
+        analysis_query = self.conv_prompts.get(
+            "IMAGE_ANALYSIS_QUERY",
+            target=self.target,
+            language=self.plan_graph.language,
+            graph_context=graph_context if graph_context.strip() else "No information collected yet."
+        )
+
+        # Analyze images using VLM
+        log_messages.append("Analyzing images with Vision Language Model...")
+        try:
+            analysis_report, image_logs = self.image_analyzer.analyze(
+                query=analysis_query,
+                images=images,
+                image_type="base64"
+            )
+            log_messages.extend(image_logs)
+            log_messages.append(f"Received image analysis report ({len(analysis_report)} chars)")
+        except Exception as e:
+            error_msg = f"Image analysis failed: {e}"
+            log_messages.append(error_msg)
+            # Return original message if analysis fails
+            return human_message, log_messages
+
+        # Enhance human message with analysis report
+        if human_message.strip():
+            enhanced_message = f"{human_message}\n\n[Medical Image Analysis Report]\n{analysis_report}"
+        else:
+            enhanced_message = f"[Medical Image Analysis Report]\n{analysis_report}"
+
+        log_messages.append("Enhanced message with image analysis report")
+
+        return enhanced_message, log_messages
 
 class GeneralConversation(BaseConversation):
     """General conversation without graph tracking"""

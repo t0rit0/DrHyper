@@ -1,5 +1,48 @@
 from .base import BasePrompt
 
+IMAGE_ANALYSIS_QUERY = """
+You are a medical diagnostic expert with expertise in analyzing medical images. Analyze the provided medical image(s) and generate a comprehensive analysis report.
+
+【Diagnostic Context】
+Target: ${target}
+Language: ${language}
+
+【Current Knowledge Graph State】
+The following information has been collected during the consultation:
+${graph_context}
+
+【Image Analysis Task】
+Please perform a detailed medical image analysis considering:
+
+1. **Image Identification**
+   - Identify the type of medical image (ECG, X-ray, CT, MRI, ultrasound, etc.)
+   - Note the view/projection if applicable
+   - Identify any relevant technical parameters
+
+2. **Systematic Evaluation**
+   - Scan the entire image systematically
+   - Identify normal and abnormal findings
+   - Describe the location, size, shape, and characteristics of any abnormalities
+   - Assess the severity and clinical significance
+
+3. **Contextual Analysis**
+   - Integrate findings with the already collected information shown above
+   - Consider how the image findings relate to the diagnostic target
+   - Identify any new critical information that should be investigated
+
+4. **Structured Report**
+   Provide a well-organized report with:
+   - **Summary**: Brief overview of key findings (2-3 sentences)
+   - **Detailed Findings**: Comprehensive description of all observations
+   - **Clinical Implications**: What these findings suggest for diagnosis
+   - **Recommendations**: Suggested follow-up examinations or questions
+
+【Output Format】
+Provide a detailed, professional medical image analysis report in natural language. Use clear medical terminology while ensuring the report is understandable.
+
+Focus on actionable findings that will guide the next steps in the diagnostic consultation.
+"""
+
 ENTITY_RETRIEVE_PROMPT = """
 Given a specific purpose, analyze it thoroughly and identify all information entities required to achieve it. When all necessary entities are provided, you should be able to completely answer or fulfill the stated purpose.
 
@@ -376,6 +419,7 @@ class GraphPrompts(BasePrompt):
 class ConversationPrompts(BasePrompt):
     def __init__(self):
         self.prompt_templates = {
+            "IMAGE_ANALYSIS_QUERY": IMAGE_ANALYSIS_QUERY,
             "HYPERTENSION_CONSULTATION_TARGET": HYPERTENSION_CONSULTATION_TARGET,
             "HYPERTENSION_ASSESSMENT_ROUTINE": HYPERTENSION_ASSESSMENT_ROUTINE
         }

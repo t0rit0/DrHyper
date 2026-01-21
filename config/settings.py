@@ -11,9 +11,10 @@ class LLMConfig:
     api_key: str
     base_url: str
     model_path: str = None
-    
+
     max_tokens: int = 8192
     temperature: float = 0.6
+    device: str = "auto"  # For local models
 
 @dataclass
 class SystemConfig:
@@ -83,5 +84,17 @@ class ConfigManager:
             beta=self.config.getfloat('GRAPH', 'beta', fallback=1.0),
             gamma=self.config.getfloat('GRAPH', 'gamma', fallback=1.0)
         )
-        
+
+        # Vision LLM configuration
+        self.vision_llm = LLMConfig(
+            provider=self.config.get('VISION LLM', 'provider', fallback='custom'),
+            model=self.config.get('VISION LLM', 'model', fallback=''),
+            api_key=self.config.get('VISION LLM', 'api_key', fallback=''),
+            base_url=self.config.get('VISION LLM', 'base_url', fallback=''),
+            model_path=self.config.get('VISION LLM', 'model_path', fallback=''),
+            max_tokens=self.config.getint('VISION LLM', 'max_tokens', fallback=4096),
+            temperature=self.config.getfloat('VISION LLM', 'temperature', fallback=0.3),
+            device=self.config.get('VISION LLM', 'device', fallback='auto')
+        )
+
         self._initialized = True

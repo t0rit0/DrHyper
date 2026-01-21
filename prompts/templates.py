@@ -310,6 +310,49 @@ Important: As required by clinical guidelines and to make the diagnosis more com
 - Carotid ultrasound examination (if performed, describe results)
 """
 
+IMAGE_INFO_EXTRACTION = """
+You are a medical information extraction expert. Extract structured information from an image analysis report and map it to entities in the knowledge graph.
+
+【Image Analysis Report】
+${report}
+
+【Current Entities in Graph】
+${current_entities}
+
+【Extraction Task】
+Extract relevant information from the image analysis report and map it to appropriate nodes in the information graph.
+
+CRITICAL GUIDELINES:
+1. Prioritize mapping information to existing nodes in the graph
+2. Only create new nodes when information doesn't fit any existing node
+3. Ensure accurate assignment of information to corresponding entities
+4. Include units and maintain information completeness in values
+
+EXTRACTION TASKS:
+
+I. For information matching existing nodes, add to "exist_nodes":
+   - id: Exact node ID from the graph (e.g., "v_1")
+   - value: Extracted information with units if applicable
+   - confidential_level: Confidence score [0-1] based on the certainty in the report
+
+II. For relevant information without matching nodes, add to "new_nodes" with:
+   - name: Concise entity name
+   - description: Detailed explanation
+   - weight: Importance [0-1] relative to purpose
+   - uncertainty: Initial entropy
+   - confidential_level: Confidence [0-1]
+   - relevance: Relevance to target [0-1]
+   - value: Extracted information
+
+OUTPUT:
+Return ONLY a JSON object with:
+- "endpoint": boolean (true if all information extracted, false if token limit reached)
+- "exist_nodes": array of existing node updates
+- "new_nodes": array of new node definitions
+
+Language: ${language}
+"""
+
 # Conversation prompts class
 class GraphPrompts(BasePrompt):
     def __init__(self):
@@ -326,7 +369,8 @@ class GraphPrompts(BasePrompt):
             "UPDATE_GRAPH": UPDATE_GRAPH_PROMPT,
             "HINT_MESSAGE_RETRIEVE": HINT_MESSAGE_RETRIEVE,
             "HINT_MESSAGE_ACCOMPLISH": HINT_MESSAGE_ACCOMPLISH,
-            "ROUTINE_ADDITION": "Follow this routine: ${routine}"
+            "ROUTINE_ADDITION": "Follow this routine: ${routine}",
+            "IMAGE_INFO_EXTRACTION": IMAGE_INFO_EXTRACTION
         }
 
 class ConversationPrompts(BasePrompt):

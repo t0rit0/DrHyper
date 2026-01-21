@@ -507,22 +507,48 @@ class EntityGraph:
         
         return hint_message, self.accomplish, log_messages
     
-    def accept_message(self, hint_message: str, query_message: str, user_message: str):
-        """Process user message and update graph"""
+    def accept_message(
+        self,
+        hint_message: str,
+        query_message: str,
+        user_message: str,
+        is_image_report: bool = False
+    ):
+        """
+        Process user message and update graph.
+
+        Args:
+            hint_message: Hint message for context
+            query_message: Query message from AI
+            user_message: User's response or image analysis report
+            is_image_report: If True, treat user_message as image analysis report
+
+        Returns:
+            List of log messages
+        """
         log_messages = []
-        
-        # self.logger.info("Processing user message...")
-        log_messages.append("Processing user message...")
-        
-        updated_nodes, new_nodes, extract_messages = self._process_user_message(hint_message, query_message, user_message)
+
+        if is_image_report:
+            log_messages.append("Processing image analysis report...")
+        else:
+            log_messages.append("Processing user message...")
+
+        updated_nodes, new_nodes, extract_messages = self._process_user_message(
+            hint_message, query_message, user_message, is_image_report=is_image_report
+        )
         log_messages.extend(extract_messages)
-        
-        # self.logger.info(f"Updated {len(updated_nodes)} existing nodes and added {len(new_nodes)} new nodes")
+
         log_messages.append(f"Updated {len(updated_nodes)} existing nodes and added {len(new_nodes)} new nodes")
-        
+
         update_messages = self._update_graph(updated_nodes, new_nodes)
         log_messages.extend(update_messages)
-        
+
+        # Re-cluster if significant changes from image report
+        if is_image_report and (len(new_nodes) > 0 or len(updated_nodes) > 3):
+            log_messages.append("Significant graph changes from image report, re-clustering...")
+            clustering_messages = self._clustering()
+            log_messages.extend(clustering_messages)
+
         return log_messages
         
     def _get_available_nodes(self) -> List[Tuple[str, Dict[str, Any]]]:
@@ -674,45 +700,80 @@ class EntityGraph:
             
         return score
     
-    def _process_user_message(self, hint_message: str, query_message: str, human_message: str) -> Tuple[List[str], List[str], List[str]]:
-        """Extract information from user message and update graph"""
+    def _process_user_message(
+        self,
+        hint_message: str,
+        query_message: str,
+        human_message: str,
+        is_image_report: bool = False
+    ) -> Tuple[List[str], List[str], List[str]]:
+        """
+        Extract information from user message and update graph.
+
+        Args:
+            hint_message: Hint message for context
+            query_message: Query message from AI
+            human_message: User's response or image analysis report
+            is_image_report: If True, treat human_message as image analysis report
+
+        Returns:
+            Tuple of (updated_node_ids, new_node_ids, log_messages)
+        """
         messages = []
         log_messages = []
         extract_info = {"exist_nodes": [], "new_nodes": []}
         iteration = 0
         endpoint = False
-        
-        # self.logger.info("Processing user message to extract information")
-        log_messages.append("Processing user message to extract information")
-        
+
+        if is_image_report:
+            log_messages.append("Processing image analysis report to extract information")
+        else:
+            log_messages.append("Processing user message to extract information")
+
         while not endpoint and iteration < 10:
             if iteration == 0:
-                prompt = self.prompts.get(
-                    "EXTRACT_INFO",
-                    purpose=self.target,
-                    graph=self._serialize_nodes(self.entity_graph),
-                    hint_message=hint_message,
-                    query_message=query_message,
-                    human_message=human_message,
-                    language=self.language
-                )
+                if is_image_report:
+                    # Use IMAGE_INFO_EXTRACTION for image reports
+                    prompt = self.prompts.get(
+                        "IMAGE_INFO_EXTRACTION",
+                        purpose=self.target,
+                        graph=self._serialize_nodes_with_value(self.entity_graph),
+                        report=human_message,
+                        language=self.language
+                    )
+                else:
+                    # Use EXTRACT_INFO for regular user messages
+                    prompt = self.prompts.get(
+                        "EXTRACT_INFO",
+                        purpose=self.target,
+                        graph=self._serialize_nodes(self.entity_graph),
+                        hint_message=hint_message,
+                        query_message=query_message,
+                        human_message=human_message,
+                        language=self.language
+                    )
             else:
+                # Continue extraction for both types
                 prompt = self.prompts.get("CONTINUE_EXTRACT_INFO")
-                
+
             messages.append(HumanMessage(content=prompt))
-            response = self.conv_model.invoke(messages)
-            
+
+            # Use graph_model for image reports, conv_model for user messages
+            if is_image_report:
+                response = self.graph_model.invoke(messages)
+            else:
+                response = self.conv_model.invoke(messages)
+
             try:
                 result = parse_json_response(response.content)
                 exist_nodes = result.get("exist_nodes", [])
                 new_nodes = result.get("new_nodes", [])
-                
+
                 extract_info["exist_nodes"].extend(exist_nodes)
                 extract_info["new_nodes"].extend(new_nodes)
-                
-                # self.logger.info(f"Iteration {iteration+1}: Extracted {len(exist_nodes)} existing nodes and {len(new_nodes)} new nodes")
+
                 log_messages.append(f"Iteration {iteration+1}: Extracted {len(exist_nodes)} existing nodes and {len(new_nodes)} new nodes")
-                
+
                 messages.append(response)
                 endpoint = result.get("endpoint", True)
                 if isinstance(endpoint, str):
@@ -721,55 +782,61 @@ class EntityGraph:
                     endpoint = endpoint
                 else:
                     error_msg = f"Unexpected endpoint type: {type(endpoint)}"
-                    # self.logger.error(error_msg)
                     log_messages.append(error_msg)
                     raise ValueError(error_msg)
-                    
+
                 iteration += 1
-                
+
                 # Break if no new information
                 if not exist_nodes and not new_nodes:
-                    # self.logger.info("No new information extracted, breaking extraction loop")
                     log_messages.append("No new information extracted, breaking extraction loop")
                     break
-                    
+
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse extraction response: {e}"
-                # self.logger.error(error_msg)
                 log_messages.append(error_msg)
                 break
-        
+
         # Update existing nodes
         updated_nodes = []
         for entry in extract_info.get("exist_nodes", []):
             node_id = entry.get("id")
             value = str(entry.get("value", "")).strip()
             confidential_level = entry.get("confidential_level", 0.0)
-            
+
             if not value or node_id not in self.entity_graph.nodes:
                 continue
-                
+
             updated_nodes.append(node_id)
-            
-            # Store value history
-            if "value_history" not in self.entity_graph.nodes[node_id]:
-                self.entity_graph.nodes[node_id]["value_history"] = []
-            self.entity_graph.nodes[node_id]["value_history"].append(
-                self.entity_graph.nodes[node_id].get("value", "")
-            )
-            
-            # Update node
+
+            # Store value history (only for user messages, not image reports)
+            if not is_image_report:
+                if "value_history" not in self.entity_graph.nodes[node_id]:
+                    self.entity_graph.nodes[node_id]["value_history"] = []
+                self.entity_graph.nodes[node_id]["value_history"].append(
+                    self.entity_graph.nodes[node_id].get("value", "")
+                )
+
+            # Update node value and confidential_level
             self.entity_graph.nodes[node_id]["value"] = value
             self.entity_graph.nodes[node_id]["confidential_level"] = confidential_level
-            
-            if confidential_level >= self.confidential_threshold:
-                self.entity_graph.nodes[node_id]["status"] = 2
+
+            # Update status based on confidential_level
+            if is_image_report:
+                # For image reports: direct mapping
+                if confidential_level >= 0.7:
+                    self.entity_graph.nodes[node_id]["status"] = 2  # High confidence
+                elif confidential_level >= 0.4:
+                    self.entity_graph.nodes[node_id]["status"] = 1  # Low confidence
             else:
-                self.entity_graph.nodes[node_id]["status"] = 1
-                
-            # self.logger.info(f"Updated node {node_id} with value: {value[:50]}...")
+                # For user messages: use threshold
+                if confidential_level >= self.confidential_threshold:
+                    self.entity_graph.nodes[node_id]["status"] = 2
+                else:
+                    self.entity_graph.nodes[node_id]["status"] = 1
+
             log_messages.append(f"Updated node {node_id} with value: {value[:50]}...")
-        
+
         # Add new nodes
         new_nodes = []
         for entry in extract_info.get("new_nodes", []):
@@ -778,15 +845,20 @@ class EntityGraph:
             value = str(entry.get("value", "")).strip()
             relevance = entry.get("relevance", 0.0)
             confidential_level = entry.get("confidential_level", 0.0)
-            
+
             if relevance < self.relevance_threshold:
-                # self.logger.info(f"Skipping node {name} with low relevance: {relevance:.2f}")
                 log_messages.append(f"Skipping node {name} with low relevance: {relevance:.2f}")
                 continue
-                
+
             if not name or not value:
                 continue
-                
+
+            # Determine status based on confidential_level
+            if is_image_report:
+                status = 2 if confidential_level >= 0.7 else (1 if confidential_level >= 0.4 else 0)
+            else:
+                status = 2 if confidential_level >= self.confidential_threshold else 1
+
             new_node_data = {
                 "id": node_id,
                 "name": name,
@@ -795,18 +867,17 @@ class EntityGraph:
                 "weight": entry.get("weight", 1.0),
                 "uncertainty": entry.get("uncertainty", 1.0),
                 "confidential_level": confidential_level,
-                "status": 2 if confidential_level >= self.confidential_threshold else 1,
+                "status": status,
                 "hit": 1,
                 "community": 0  # Will be updated in clustering
             }
-            
+
             self.entity_graph.add_node(node_id, **new_node_data)
             self.relation_graph.add_node(node_id, **new_node_data)
             new_nodes.append(node_id)
-            
-            # self.logger.info(f"Added new node {node_id}: {name}")
+
             log_messages.append(f"Added new node {node_id}: {name}")
-        
+
         return updated_nodes, new_nodes, log_messages
     
     def _update_graph(self, updated_nodes: List[str], new_nodes: List[str]):
@@ -919,3 +990,4 @@ class EntityGraph:
         info += f"- Hit: {node.get('hit', 0)} (number of times queried)\n"
         info += f"- Status: {node.get('status', 0)} (0 for unknown, 1 for low confidence, 2 for high confidence)\n"
         return info
+

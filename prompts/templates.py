@@ -34,13 +34,11 @@ Please perform a detailed medical image analysis considering:
    Provide a well-organized report with:
    - **Summary**: Brief overview of key findings (2-3 sentences)
    - **Detailed Findings**: Comprehensive description of all observations
-   - **Clinical Implications**: What these findings suggest for diagnosis
-   - **Recommendations**: Suggested follow-up examinations or questions
 
 【Output Format】
 Provide a detailed, professional medical image analysis report in natural language. Use clear medical terminology while ensuring the report is understandable.
 
-Focus on actionable findings that will guide the next steps in the diagnostic consultation.
+Focus on describing what is observed in the image without making diagnostic conclusions or recommendations.
 """
 
 ENTITY_RETRIEVE_PROMPT = """

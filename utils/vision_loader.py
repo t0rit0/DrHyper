@@ -22,21 +22,28 @@ except ImportError:
 class VisionChatModel(BaseChatModel):
     """Vision Chat Model that interfaces with multi-modal LLMs via API (OpenAI-compatible)"""
 
-    model_name: str = None
-    api_key: str = None
-    base_url: str = None
+    # Pydantic fields - need to be explicitly defined
+    model_name: str
+    api_key: str
+    base_url: str
     temperature: float = 0.0
     max_tokens: int = 8192
 
-    def __init__(self, model_name, api_key, base_url, temperature, max_tokens, **kwargs):
-        super().__init__(**kwargs)
+    # Private attributes - not managed by Pydantic
+    _logger: Any = None
 
-        self.model_name = model_name
-        self.api_key = api_key
-        self.base_url = base_url
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.logger = get_logger(self.__class__.__name__)
+    def __init__(self, model_name, api_key, base_url, temperature, max_tokens, **kwargs):
+        super().__init__(
+            model_name=model_name,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs
+        )
+
+        # Initialize logger as private attribute (not managed by Pydantic)
+        object.__setattr__(self, '_logger', get_logger(self.__class__.__name__))
 
     @property
     def _llm_type(self) -> str:
@@ -75,7 +82,7 @@ class VisionChatModel(BaseChatModel):
         # Convert messages to API format
         api_messages = [self._convert_message(msg) for msg in messages]
 
-        self.logger.debug(f"Sending {len(api_messages)} messages to vision model")
+        self._logger.debug(f"Sending {len(api_messages)} messages to vision model")
 
         completion = client.chat.completions.create(
             model=self.model_name,
@@ -87,7 +94,7 @@ class VisionChatModel(BaseChatModel):
         )
 
         response_content = completion.choices[0].message.content
-        self.logger.debug(f"Received response length: {len(response_content) if response_content else 0}")
+        self._logger.debug(f"Received response length: {len(response_content) if response_content else 0}")
 
         return response_content
 
@@ -153,19 +160,36 @@ class LocalVisionChatModel(BaseChatModel):
     - Local checkpoints of Qwen-VL models
     """
 
-    model_path: str = None
+    # Pydantic fields
+    model_path: str
     temperature: float = 0.0
     max_tokens: int = 2048
-    device: str = "auto"  # 'cpu', 'cuda', 'auto'
+    device: str = "auto"
     model_kwargs: Dict[str, Any] = {}
     generation_kwargs: Dict[str, Any] = {}
 
+    # Private attributes
     _model = None
     _tokenizer = None
     _processor = None
+    _logger: Any = None
 
     def __init__(self, model_path: str, **kwargs):
-        super().__init__(**kwargs)
+        # Extract model_path before passing to parent
+        temperature = kwargs.get('temperature', 0.0)
+        max_tokens = kwargs.get('max_tokens', 2048)
+        device = kwargs.get('device', 'auto')
+        model_kwargs_val = kwargs.get('model_kwargs', {})
+        generation_kwargs_val = kwargs.get('generation_kwargs', {})
+
+        super().__init__(
+            model_path=model_path,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            device=device,
+            model_kwargs=model_kwargs_val,
+            generation_kwargs=generation_kwargs_val
+        )
 
         if not TRANSFORMERS_AVAILABLE:
             raise ImportError(
@@ -173,23 +197,16 @@ class LocalVisionChatModel(BaseChatModel):
                 "Please install them with: pip install transformers torch pillow"
             )
 
-        self.model_path = model_path
-        self.temperature = kwargs.get('temperature', ConfigManager().system.temperature)
-        self.max_tokens = kwargs.get('max_tokens', ConfigManager().system.max_tokens)
-        self.device = kwargs.get('device', 'auto')
-        self.model_kwargs = kwargs.get('model_kwargs', {})
-        self.generation_kwargs = kwargs.get('generation_kwargs', {})
-        self.logger = get_logger(self.__class__.__name__)
-
-        self._load_model()
+        # Initialize logger as private attribute
+        object.__setattr__(self, '_logger', get_logger(self.__class__.__name__))
 
     def _load_model(self):
         """Load Qwen-VL model from the specified path"""
-        self.logger.info(f"Loading Qwen-VL model from: {self.model_path}")
+        self._logger.info(f"Loading Qwen-VL model from: {self.model_path}")
 
         try:
             # Load processor
-            self.logger.debug("Loading AutoProcessor...")
+            self._logger.debug("Loading AutoProcessor...")
             self._processor = AutoProcessor.from_pretrained(
                 self.model_path,
                 trust_remote_code=True,
@@ -197,7 +214,7 @@ class LocalVisionChatModel(BaseChatModel):
             )
 
             # Load model
-            self.logger.debug("Loading AutoModelForCausalLM...")
+            self._logger.debug("Loading AutoModelForCausalLM...")
             self._model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
                 device_map=self.device,
@@ -212,10 +229,10 @@ class LocalVisionChatModel(BaseChatModel):
             if hasattr(self._model, 'eval'):
                 self._model.eval()
 
-            self.logger.info(f"Successfully loaded Qwen-VL model on {self._model.device}")
+            self._logger.info(f"Successfully loaded Qwen-VL model on {self._model.device}")
 
         except Exception as e:
-            self.logger.error(f"Failed to load Qwen-VL model: {e}")
+            self._logger.error(f"Failed to load Qwen-VL model: {e}")
             raise
 
     @property
@@ -254,7 +271,7 @@ class LocalVisionChatModel(BaseChatModel):
                     img = self._load_image(url)
                     if img:
                         images.append(img)
-                        self.logger.debug(f"Loaded image: {len(images)} total")
+                        self._logger.debug(f"Loaded image: {len(images)} total")
 
                 elif item.get("type") == "text":
                     text_parts.append(item.get("text", ""))
@@ -291,11 +308,11 @@ class LocalVisionChatModel(BaseChatModel):
                     img = Image.open(url)
                     return img.convert("RGB")
                 else:
-                    self.logger.warning(f"Image file not found: {url}")
+                    self._logger.warning(f"Image file not found: {url}")
                     return None
 
         except Exception as e:
-            self.logger.error(f"Failed to load image from {url[:50]}...: {e}")
+            self._logger.error(f"Failed to load image from {url[:50]}...: {e}")
             return None
 
     def _format_messages_for_model(self, messages: List[BaseMessage]) -> tuple:
@@ -328,7 +345,7 @@ class LocalVisionChatModel(BaseChatModel):
         # Extract images and format prompt
         images, text_prompt = self._format_messages_for_model(messages)
 
-        self.logger.debug(f"Processing with {len(images)} image(s), prompt length: {len(text_prompt)}")
+        self._logger.debug(f"Processing with {len(images)} image(s), prompt length: {len(text_prompt)}")
 
         # Format query for Qwen-VL
         if images:

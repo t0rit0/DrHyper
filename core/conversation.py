@@ -327,7 +327,7 @@ class LongConversation(BaseConversation):
                 analysis_report[:500] + "..." if len(analysis_report) > 500 else analysis_report
             ],
             "full_report": analysis_report,
-            "confidence": 0.95,
+            "confidence": 0,
             "recommendation": "AI 正在生成详细分析报告 / AI is generating detailed analysis",
             "image_count": len(images)
         }

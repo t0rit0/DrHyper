@@ -5,6 +5,7 @@ import json
 from typing import List, Dict, Any, Optional, Tuple
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from config.settings import ConfigManager
@@ -113,34 +114,55 @@ class ConversationManager:
         
         return conversation_id, ai_message, "\n".join(log_messages)
     
-    def process_message(self, conversation_id: str, human_message: str) -> Tuple[str, bool, str]:
-        """Process a chat message"""
+    def process_message(self, conversation_id: str, human_message: str, images: Optional[List[str]] = None) -> Tuple[str, bool, Optional[Dict[str, Any]], str]:
+        """
+        Process a chat message with optional image support.
+
+        Args:
+            conversation_id: Conversation session ID
+            human_message: User's text message
+            images: Optional list of base64-encoded images
+
+        Returns:
+            Tuple of (ai_response, accomplish, analysis_report, log_messages)
+        """
         log_messages = []
-        
+
         if conversation_id not in self.conversations:
             error_msg = f"Conversation {conversation_id} not found"
             logger.error(error_msg)
             log_messages.append(error_msg)
             raise ValueError(error_msg)
-            
+
         conv_data = self.conversations[conversation_id]
         conv = conv_data["conv"]
-        
-        # Process message
-        logger.info(f"Processing message in conversation {conversation_id}")
-        log_messages.append(f"Processing message in conversation {conversation_id}")
-        
-        ai_response, accomplish, process_log_messages = conv.conversation(human_message)
+
+        # Log if images are present
+        if images:
+            logger.info(f"Processing message with {len(images)} image(s) in conversation {conversation_id}")
+            log_messages.append(f"Processing message with {len(images)} image(s)")
+        else:
+            logger.info(f"Processing message in conversation {conversation_id}")
+            log_messages.append(f"Processing message in conversation {conversation_id}")
+
+        # Process message with optional images
+        ai_response, accomplish, analysis_report, process_log_messages = conv.conversation(human_message, images)
         log_messages.extend(process_log_messages)
-        
+
         # Update message history
-        conv_data["messages"].append({"role": "user", "content": human_message})
+        # Include image information in the message history
+        user_message_entry = {"role": "user", "content": human_message}
+        if images:
+            user_message_entry["images"] = f"[{len(images)} image(s) uploaded]"
+            user_message_entry["image_count"] = len(images)
+
+        conv_data["messages"].append(user_message_entry)
         conv_data["messages"].append({"role": "assistant", "content": ai_response})
-        
+
         logger.info(f"Processed message in conversation {conversation_id}, accomplish status: {accomplish}")
         log_messages.append(f"Processed message in conversation {conversation_id}, accomplish status: {accomplish}")
-        
-        return ai_response, accomplish, "\n".join(log_messages)
+
+        return ai_response, accomplish, analysis_report, "\n".join(log_messages)
     
     def save_conversation(self, conversation_id: str, in_memory: bool = False):
         """Save conversation to disk"""
@@ -287,6 +309,16 @@ class ConversationManager:
 
 # Initialize app and manager
 app = FastAPI(title="DrHyper Conversation API")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify actual origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 manager = ConversationManager()
 
 # Request/Response Models
@@ -304,10 +336,12 @@ class InitConversationResponse(BaseModel):
 class ChatRequest(BaseModel):
     conversation_id: str
     human_message: str
+    images: Optional[List[str]] = None  # List of base64-encoded images
 
 class ChatResponse(BaseModel):
     ai_message: str
     accomplish: bool = False  # if the diagnosis is finished, accomplish the conversation
+    analysis_report: Optional[Dict[str, Any]] = None  # medical image analysis report if any
     log_messages: str = ""
 
 class EndConversationRequest(BaseModel):
@@ -353,12 +387,17 @@ async def init_conversation(request: InitConversationRequest):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Process a chat message"""
+    """Process a chat message with optional image support"""
     try:
-        ai_message, accomplish, log_messages = manager.process_message(request.conversation_id, request.human_message)
+        ai_message, accomplish, analysis_report, log_messages = manager.process_message(
+            request.conversation_id,
+            request.human_message,
+            request.images
+        )
         return ChatResponse(
             ai_message=ai_message,
             accomplish=accomplish,
+            analysis_report=analysis_report,
             log_messages=log_messages
         )
     except ValueError as e:

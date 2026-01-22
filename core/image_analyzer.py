@@ -123,9 +123,9 @@ class ImageAnalyzer:
         else:
             # Load from configuration
             try:
-                vision_config = self.config.system.vision_llm if hasattr(self.config.system, 'vision_llm') else None
+                vision_config = self.config.vision_llm if hasattr(self.config, 'vision_llm') else None
 
-                if vision_config:
+                if vision_config and vision_config.model:  # Check both config exists and model is set
                     self.vision_model = load_vision_model(
                         provider=vision_config.provider,
                         model_name=vision_config.model,

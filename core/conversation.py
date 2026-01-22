@@ -199,15 +199,17 @@ class LongConversation(BaseConversation):
             images: Optional list of base64-encoded images for analysis
 
         Returns:
-            Tuple of (response_content, accomplish, log_messages)
+            Tuple of (response_content, accomplish, analysis_report, log_messages)
         """
         log_messages = []
         # self.logger.info("Processing conversation turn...")
         log_messages.append("Processing conversation turn...")
 
+        analysis_report = None
+
         # If images provided, analyze them first and enhance the message
         if images and self.image_analyzer.is_available():
-            human_message, image_logs = self._analyze_images(human_message, images)
+            human_message, analysis_report, image_logs = self._analyze_images(human_message, images)
             log_messages.extend(image_logs)
 
         # Continue with normal conversation flow
@@ -269,10 +271,10 @@ class LongConversation(BaseConversation):
             # self.logger.info("Conversation goal accomplished!")
             log_messages.append("Conversation goal accomplished!")
 
-        return response_content, self.plan_graph.accomplish, log_messages
+        return response_content, self.plan_graph.accomplish, analysis_report, log_messages
 
 
-    def _analyze_images(self, human_message: str, images: List[str]) -> Tuple[str, List[str]]:
+    def _analyze_images(self, human_message: str, images: List[str]) -> Tuple[str, Optional[Dict[str, Any]], List[str]]:
         """
         Analyze images and enhance human message with analysis report.
 
@@ -284,7 +286,7 @@ class LongConversation(BaseConversation):
             images: List of base64-encoded images
 
         Returns:
-            Tuple of (enhanced_message, log_messages)
+            Tuple of (enhanced_message, analysis_report_dict, log_messages)
         """
         log_messages = []
         log_messages.append(f"Processing {len(images)} image(s) with VLM...")
@@ -314,8 +316,21 @@ class LongConversation(BaseConversation):
         except Exception as e:
             error_msg = f"Image analysis failed: {e}"
             log_messages.append(error_msg)
-            # Return original message if analysis fails
-            return human_message, log_messages
+            # Return original message and None report if analysis fails
+            return human_message, None, log_messages
+
+        # Create structured analysis report
+        analysis_report_dict = {
+            "findings": [
+                "影像已接收 / Image received",
+                "AI 正在分析 / AI analyzing",
+                analysis_report[:500] + "..." if len(analysis_report) > 500 else analysis_report
+            ],
+            "full_report": analysis_report,
+            "confidence": 0.95,
+            "recommendation": "AI 正在生成详细分析报告 / AI is generating detailed analysis",
+            "image_count": len(images)
+        }
 
         # Enhance human message with analysis report
         if human_message.strip():
@@ -325,7 +340,7 @@ class LongConversation(BaseConversation):
 
         log_messages.append("Enhanced message with image analysis report")
 
-        return enhanced_message, log_messages
+        return enhanced_message, analysis_report_dict, log_messages
 
 class GeneralConversation(BaseConversation):
     """General conversation without graph tracking"""

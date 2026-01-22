@@ -1,5 +1,46 @@
 from .base import BasePrompt
 
+IMAGE_ANALYSIS_QUERY = """
+You are a medical diagnostic expert with expertise in analyzing medical images. Analyze the provided medical image(s) and generate a comprehensive analysis report.
+
+【Diagnostic Context】
+Target: ${target}
+Language: ${language}
+
+【Current Knowledge Graph State】
+The following information has been collected during the consultation:
+${graph_context}
+
+【Image Analysis Task】
+Please perform a detailed medical image analysis considering:
+
+1. **Image Identification**
+   - Identify the type of medical image (ECG, X-ray, CT, MRI, ultrasound, etc.)
+   - Note the view/projection if applicable
+   - Identify any relevant technical parameters
+
+2. **Systematic Evaluation**
+   - Scan the entire image systematically
+   - Identify normal and abnormal findings
+   - Describe the location, size, shape, and characteristics of any abnormalities
+   - Assess the severity and clinical significance
+
+3. **Contextual Analysis**
+   - Integrate findings with the already collected information shown above
+   - Consider how the image findings relate to the diagnostic target
+   - Identify any new critical information that should be investigated
+
+4. **Structured Report**
+   Provide a well-organized report with:
+   - **Summary**: Brief overview of key findings (2-3 sentences)
+   - **Detailed Findings**: Comprehensive description of all observations
+
+【Output Format】
+Provide a detailed, professional medical image analysis report in natural language. Use clear medical terminology while ensuring the report is understandable.
+
+Focus on describing what is observed in the image without making diagnostic conclusions or recommendations.
+"""
+
 ENTITY_RETRIEVE_PROMPT = """
 Given a specific purpose, analyze it thoroughly and identify all information entities required to achieve it. When all necessary entities are provided, you should be able to completely answer or fulfill the stated purpose.
 
@@ -310,6 +351,49 @@ Important: As required by clinical guidelines and to make the diagnosis more com
 - Carotid ultrasound examination (if performed, describe results)
 """
 
+IMAGE_INFO_EXTRACTION = """
+You are a medical information extraction expert. Extract structured information from an image analysis report and map it to entities in the knowledge graph.
+
+【Image Analysis Report】
+${report}
+
+【Current Entities in Graph】
+${current_entities}
+
+【Extraction Task】
+Extract relevant information from the image analysis report and map it to appropriate nodes in the information graph.
+
+CRITICAL GUIDELINES:
+1. Prioritize mapping information to existing nodes in the graph
+2. Only create new nodes when information doesn't fit any existing node
+3. Ensure accurate assignment of information to corresponding entities
+4. Include units and maintain information completeness in values
+
+EXTRACTION TASKS:
+
+I. For information matching existing nodes, add to "exist_nodes":
+   - id: Exact node ID from the graph (e.g., "v_1")
+   - value: Extracted information with units if applicable
+   - confidential_level: Confidence score [0-1] based on the certainty in the report
+
+II. For relevant information without matching nodes, add to "new_nodes" with:
+   - name: Concise entity name
+   - description: Detailed explanation
+   - weight: Importance [0-1] relative to purpose
+   - uncertainty: Initial entropy
+   - confidential_level: Confidence [0-1]
+   - relevance: Relevance to target [0-1]
+   - value: Extracted information
+
+OUTPUT:
+Return ONLY a JSON object with:
+- "endpoint": boolean (true if all information extracted, false if token limit reached)
+- "exist_nodes": array of existing node updates
+- "new_nodes": array of new node definitions
+
+Language: ${language}
+"""
+
 # Conversation prompts class
 class GraphPrompts(BasePrompt):
     def __init__(self):
@@ -326,12 +410,14 @@ class GraphPrompts(BasePrompt):
             "UPDATE_GRAPH": UPDATE_GRAPH_PROMPT,
             "HINT_MESSAGE_RETRIEVE": HINT_MESSAGE_RETRIEVE,
             "HINT_MESSAGE_ACCOMPLISH": HINT_MESSAGE_ACCOMPLISH,
-            "ROUTINE_ADDITION": "Follow this routine: ${routine}"
+            "ROUTINE_ADDITION": "Follow this routine: ${routine}",
+            "IMAGE_INFO_EXTRACTION": IMAGE_INFO_EXTRACTION
         }
 
 class ConversationPrompts(BasePrompt):
     def __init__(self):
         self.prompt_templates = {
+            "IMAGE_ANALYSIS_QUERY": IMAGE_ANALYSIS_QUERY,
             "HYPERTENSION_CONSULTATION_TARGET": HYPERTENSION_CONSULTATION_TARGET,
             "HYPERTENSION_ASSESSMENT_ROUTINE": HYPERTENSION_ASSESSMENT_ROUTINE
         }

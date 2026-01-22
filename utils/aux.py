@@ -1,6 +1,8 @@
 from __future__ import annotations
 from config.settings import ConfigManager
 from utils.llm_loader import load_chat_model
+from utils.vision_loader import load_vision_model
+from typing import Optional, Tuple
 
 # ANSI color codes for terminal output
 class Colors:
@@ -89,3 +91,85 @@ def load_models(verbose=False):
             import traceback
             print(format_debug(traceback.format_exc()))
         raise(e)
+
+def load_vision_model_or_none(verbose=False) -> Optional:
+    """
+    Load vision model if configured, otherwise return None.
+
+    Supports both API-based and local vision models.
+
+    Args:
+        verbose: Enable verbose logging
+
+    Returns:
+        Vision model instance or None if not configured
+    """
+    print(format_system_message("Checking for vision model configuration..."))
+    config = ConfigManager()
+
+    try:
+        provider = config.vision_llm.provider
+
+        # API-based model (provider = "custom")
+        if provider == "custom":
+            if not config.vision_llm.model or not config.vision_llm.api_key or not config.vision_llm.base_url:
+                print(format_system_message("Vision API model not configured (missing model, api_key, or base_url)"))
+                return None
+
+            if config.vision_llm.api_key == "your-vision-api-key":
+                print(format_system_message("Vision API model not configured (using placeholder api_key)"))
+                return None
+
+            vision_model = load_vision_model(
+                provider=config.vision_llm.provider,
+                model_name=config.vision_llm.model,
+                api_key=config.vision_llm.api_key,
+                base_url=config.vision_llm.base_url,
+                max_tokens=config.vision_llm.max_tokens,
+                temperature=config.vision_llm.temperature
+            )
+
+            print(format_system_message(f"Loaded API vision model: {config.vision_llm.model}"))
+            return vision_model
+
+        # Local model (provider = "local")
+        elif provider == "local":
+            if not config.vision_llm.model_path:
+                print(format_system_message("Local vision model not configured (missing model_path)"))
+                return None
+
+            vision_model = load_vision_model(
+                provider=config.vision_llm.provider,
+                model_path=config.vision_llm.model_path,
+                max_tokens=config.vision_llm.max_tokens,
+                temperature=config.vision_llm.temperature,
+                device=config.vision_llm.device
+            )
+
+            print(format_system_message(f"Loaded local vision model: {config.vision_llm.model_path}"))
+            return vision_model
+
+        else:
+            print(format_system_message(f"Unsupported vision provider: {provider}"))
+            return None
+
+    except Exception as e:
+        print(format_system_message(f"Error loading vision model: {e}"))
+        if verbose:
+            import traceback
+            print(format_debug(traceback.format_exc()))
+        return None
+
+def load_models_with_vision(verbose=False) -> Tuple:
+    """
+    Load conversation, graph, and optionally vision models.
+
+    Args:
+        verbose: Enable verbose logging
+
+    Returns:
+        Tuple of (conv_model, graph_model, vision_model_or_none)
+    """
+    conv_model, graph_model = load_models(verbose)
+    vision_model = load_vision_model_or_none(verbose)
+    return conv_model, graph_model, vision_model

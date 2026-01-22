@@ -113,13 +113,32 @@ temperature = 0.8         # Response creativity (0.0-1.0)
 ```ini
 [GRAPH LLM]
 provider = custom          # Same options as conversation LLM
-api_key = your-api-key    
+api_key = your-api-key
 base_url = https://api-endpoint.com
 model = model-name
 model_path = ""
 max_tokens = 8192
 temperature = 0.8
 ```
+
+### Vision LLM Configuration 🆕
+
+```ini
+[VISION LLM]
+provider = custom          # Options: openai, custom, local
+api_key = your-api-key
+base_url = https://api-endpoint.com
+model = model-name        # Vision-capable model (e.g., gpt-4-vision, qwen-vl)
+model_path = ""           # Path for local vision models
+max_tokens = 8192
+temperature = 0.7
+device = cuda              # Device for local models (cuda/cpu)
+```
+
+**Supported Vision Models:**
+- **API Models**: OpenAI GPT-4V, Claude 3.5 Sonnet, or any OpenAI-compatible vision API
+- **Local Models**: Qwen-VL series, LLaVA, or other local multimodal models
+- **Image Formats**: PNG, JPEG, DICOM (converted), and other standard medical imaging formats
 
 ### System Configuration
 
@@ -226,7 +245,7 @@ Initializes a new conversation session with patient information.
 
 ##### Chat
 
-Sends a message to an existing conversation and receives an AI response.
+Sends a message to an existing conversation and receives an AI response. **Supports optional medical image analysis.**
 
 - **URL**: `/chat`
 - **Method**: `POST`
@@ -234,7 +253,8 @@ Sends a message to an existing conversation and receives an AI response.
   ```json
   {
     "conversation_id": "string",
-    "human_message": "string"
+    "human_message": "string",
+    "images": ["string"]  // Optional: array of base64-encoded images
   }
   ```
 - **Response**:
@@ -245,9 +265,22 @@ Sends a message to an existing conversation and receives an AI response.
     "log_messages": "string"
   }
   ```
+- **Parameters**:
+  - `conversation_id`: Identifier of the conversation (string, required)
+  - `human_message`: Message from the patient (string, required)
+  - `images`: Array of base64-encoded medical images (array of strings, optional) 🆕
+    - Images should be in format: `data:image/<type>;base64,<base64_data>`
+    - Supported formats: PNG, JPEG, and other medical imaging formats
+    - Multiple images can be sent in a single request
 - **Notes**:
   - `accomplish` is a boolean indicating whether the diagnosis is complete
   - When `accomplish` is `true`, the conversation has reached a diagnostic conclusion
+  - **Image Analysis** 🆕:
+    - When `images` are provided, they are analyzed by the Vision LLM
+    - The analysis report is automatically integrated into the conversation
+    - Image findings update the knowledge graph and influence subsequent questions
+    - The AI response will naturally incorporate image analysis results
+    - If image analysis fails, the system gracefully falls back to text-only processing
 
 ##### End Conversation
 
@@ -366,8 +399,11 @@ Updates system settings.
 - `log_messages`: Detailed logs (string)
 
 ##### ChatRequest
-- `conversation_id`: Identifier of the conversation (string)
-- `human_message`: Message from the patient (string)
+- `conversation_id`: Identifier of the conversation (string, required)
+- `human_message`: Message from the patient (string, required)
+- `images`: Array of base64-encoded medical images (array of strings, optional) 🆕
+  - Format: `data:image/<type>;base64,<base64_data>`
+  - Example: `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...`
 
 ##### ChatResponse
 - `ai_message`: Response from the AI (string)
@@ -440,6 +476,7 @@ Here's a complete example of using the API to conduct a hypertension consultatio
 ```python
 import requests
 import json
+import base64
 
 # Base URL for the API
 BASE_URL = "http://localhost:8000"
@@ -468,6 +505,40 @@ def send_message(conversation_id, message):
         raise Exception(f"Failed to send message: {response.json()['detail']}")
     return response.json()
 
+# Send message with medical images 🆕
+def send_message_with_images(conversation_id, message, image_paths):
+    """
+    Send a message with medical images for analysis.
+
+    Args:
+        conversation_id: Conversation session ID
+        message: Text message from patient
+        image_paths: List of paths to medical image files
+    """
+    # Convert images to base64
+    encoded_images = []
+    for path in image_paths:
+        with open(path, "rb") as img_file:
+            encoded = base64.b64encode(img_file.read()).decode('utf-8')
+            # Detect image type
+            if path.lower().endswith('.png'):
+                encoded_images.append(f"data:image/png;base64,{encoded}")
+            elif path.lower().endswith(('.jpg', '.jpeg')):
+                encoded_images.append(f"data:image/jpeg;base64,{encoded}")
+            else:
+                # Default to PNG
+                encoded_images.append(f"data:image/png;base64,{encoded}")
+
+    chat_data = {
+        "conversation_id": conversation_id,
+        "human_message": message,
+        "images": encoded_images
+    }
+    response = requests.post(f"{BASE_URL}/chat", json=chat_data)
+    if response.status_code != 200:
+        raise Exception(f"Failed to send message: {response.json()['detail']}")
+    return response.json()
+
 # End the conversation
 def end_conversation(conversation_id):
     end_data = {
@@ -478,36 +549,92 @@ def end_conversation(conversation_id):
         raise Exception(f"Failed to end conversation: {response.json()['detail']}")
     return response.json()
 
-# Main execution flow
+# Main execution flow with image analysis
 try:
     # Start conversation
     result = init_conversation("Li Ming", 62, "male")
     conversation_id = result["conversation_id"]
     print(f"Conversation started with ID: {conversation_id}")
-    print(f"AI: {result['ai_message']}")
-    
-    # Sample conversation flow
-    messages = [
-        "My blood pressure has been high lately, around 150/95",
-        "I've been feeling dizzy in the mornings",
-        "Yes, I take medication but sometimes forget",
-        "I don't exercise much and eat a lot of salty food"
-    ]
-    
-    for message in messages:
-        print(f"\nPatient: {message}")
-        response = send_message(conversation_id, message)
-        print(f"AI: {response['ai_message']}")
-        
-        # Check if diagnosis is complete
-        if response["accomplish"]:
-            print("\nDiagnosis completed automatically.")
-            break
-    
-    # Manually end the conversation if not already completed
-    if not response.get("accomplish", False):
+    print(f"AI: {result['ai_message']}\n")
+
+    # Initial text consultation
+    print("Patient: My blood pressure has been high lately, around 150/95")
+    response = send_message(conversation_id, "My blood pressure has been high lately, around 150/95")
+    print(f"AI: {response['ai_message']}\n")
+
+    # Send ECG image for analysis 🆕
+    print("Patient: [Uploading ECG] This is my ECG from yesterday")
+    response = send_message_with_images(
+        conversation_id,
+        "This is my ECG from yesterday",
+        ["./patient_ecg.png"]  # Path to ECG image file
+    )
+    print(f"AI: {response['ai_message']}")
+    print(f"[Image analysis integrated into consultation]\n")
+
+    # Continue conversation after image analysis
+    print("Patient: Yes, I've had chest pain for about 2 hours")
+    response = send_message(conversation_id, "Yes, I've had chest pain for about 2 hours")
+    print(f"AI: {response['ai_message']}\n")
+
+    # Check if diagnosis is complete
+    if response["accomplish"]:
+        print("Diagnosis completed automatically.")
+    else:
+        # Manually end the conversation
         end_result = end_conversation(conversation_id)
-        print(f"\nConversation ended: {end_result['conversation_id']}")
+        print(f"Conversation ended: {end_result['conversation_id']}")
+
+except Exception as e:
+    print(f"Error: {str(e)}")
+```
+
+### Example 3: Image-Only Consultation 🆕
+
+Sometimes patients may only provide medical images without additional text:
+
+```python
+# Patient uploads only an image
+try:
+    result = init_conversation("Zhang Wei", 58, "male")
+    conversation_id = result["conversation_id"]
+
+    # Send only the image, no text message
+    response = send_message_with_images(
+        conversation_id,
+        "",  # Empty message
+        ["./chest_xray.jpg"]
+    )
+
+    print(f"AI: {response['ai_message']}")
+    # AI will analyze the X-ray and ask relevant follow-up questions
+
+except Exception as e:
+    print(f"Error: {str(e)}")
+```
+
+### Example 4: Multiple Images Analysis 🆕
+
+Analyzing multiple related images in a single request:
+
+```python
+# Upload ECG and echocardiogram together
+try:
+    result = init_conversation("Wang Fang", 65, "female")
+    conversation_id = result["conversation_id"]
+
+    response = send_message_with_images(
+        conversation_id,
+        "Here are my ECG and echocardiogram from today",
+        [
+            "./ecg_leads_v1-v6.png",
+            "./echo_parasternal_view.png",
+            "./echo_apical_view.png"
+        ]
+    )
+
+    print(f"AI: {response['ai_message']}")
+    # AI will analyze all images and provide integrated assessment
 
 except Exception as e:
     print(f"Error: {str(e)}")

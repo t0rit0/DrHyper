@@ -47,17 +47,18 @@ class EntityGraph:
         self.step = 0
         self.accomplish = False
         self.prev_node = None
-        # self.logger = get_logger(self.__class__.__name__)
-        
+        self.logger = get_logger(self.__class__.__name__)
+
         self._ensure_working_directory()
     
     def _ensure_working_directory(self):
         """Ensure working directory exists"""
         if self.working_directory and not os.path.exists(self.working_directory):
             os.makedirs(self.working_directory)
-            # self.logger.info(f"Created working directory: {self.working_directory}")
+            self.logger.info(f"Created working directory: {self.working_directory}")
             log_messages = [f"Created working directory: {self.working_directory}"]
             return log_messages
+        self.logger.info("Working directory already exists")
         log_messages = ["Working directory already exists"]
         return log_messages
     
@@ -80,7 +81,8 @@ class EntityGraph:
         """Save entity and relation graphs to files"""
         log_messages = []
         if not self.working_directory:
-            log_messages.append("No working directory specified, graphs not saved")
+            self.logger.info("No working directory specified, graphs not saved")
+            # log_messages.append("No working directory specified, graphs not saved")
             return log_messages
             
         entity_graph_file = os.path.join(output_dir, "entity_graph.pkl")
@@ -90,9 +92,9 @@ class EntityGraph:
             pickle.dump(self.entity_graph, f)
         with open(relation_graph_file, "wb") as f:
             pickle.dump(self.relation_graph, f)
-            
-        # self.logger.info(f"Saved graphs to {self.working_directory}")
-        log_messages.append(f"Saved graphs to {self.working_directory}")
+
+        self.logger.info(f"Saved graphs to {self.working_directory}")
+        # log_messages.append(f"Saved graphs to {self.working_directory}")
         return log_messages
     
     def load_graphs(self, entity_graph_path: str, relation_graph_path: str):
@@ -100,13 +102,13 @@ class EntityGraph:
         log_messages = []
         if not os.path.exists(entity_graph_path):
             error_msg = f"Entity graph not found: {entity_graph_path}"
-            # self.logger.error(error_msg)
-            log_messages.append(error_msg)
+            self.logger.error(error_msg)
+            # log_messages.append(error_msg)
             raise FileNotFoundError(error_msg)
         if not os.path.exists(relation_graph_path):
             error_msg = f"Relation graph not found: {relation_graph_path}"
-            # self.logger.error(error_msg)
-            log_messages.append(error_msg)
+            self.logger.error(error_msg)
+            # log_messages.append(error_msg)
             raise FileNotFoundError(error_msg)
             
         with open(entity_graph_path, "rb") as f:
@@ -117,8 +119,8 @@ class EntityGraph:
         clustering_messages = self._clustering()
         log_messages.extend(clustering_messages)
         
-        # self.logger.info("Loaded graphs successfully")
-        log_messages.append("Loaded graphs successfully")
+        self.logger.info("Loaded graphs successfully")
+        # log_messages.append("Loaded graphs successfully")
         return log_messages
     
     def _initialize_graph(self):
@@ -210,15 +212,15 @@ class EntityGraph:
                 
         except json.JSONDecodeError as e:
             error_msg = f"Failed to parse entity response: {e}"
-            # self.logger.error(f"response.content: {response.content}")
-            # self.logger.error(error_msg)
-            log_messages.append(error_msg)
+            self.logger.error(f"response.content: {response.content}")
+            self.logger.error(error_msg)
+            # log_messages.append(error_msg)
             raise
         
         # Assign IDs to entities
         entities_with_ids = [{"id": f"v{i}", "name": entity} for i, entity in enumerate(entities, start=1)]
-        # self.logger.info(f"Retrieved {len(entities_with_ids)} entities")
-        log_messages.append(f"Retrieved {len(entities_with_ids)} entities")
+        self.logger.info(f"Retrieved {len(entities_with_ids)} entities")
+        # log_messages.append(f"Retrieved {len(entities_with_ids)} entities")
         
         return entities_with_ids, log_messages
     
@@ -239,14 +241,16 @@ class EntityGraph:
             try:
                 chunk_nodes = parse_json_response(response.content)
                 nodes.extend(chunk_nodes)
-                # self.logger.info(f"Initialized attributes for chunk {i//chunk_size + 1}/{math.ceil(len(entities)/chunk_size)}")
+                self.logger.info(f"Initialized attributes for chunk {i//chunk_size + 1}/{math.ceil(len(entities)/chunk_size)}")
+                # log_messages.append(f"Initialized attributes for chunk {i//chunk_size + 1}/{math.ceil(len(entities)/chunk_size)}")
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse entity attributes: {e}"
-                # self.logger.error(error_msg)
+                self.logger.error(error_msg)
+                # log_messages.append(error_msg)
                 raise
-                
-        # self.logger.info(f"Total number of nodes: {len(nodes)}")
-        log_messages.append(f"Total number of nodes: {len(nodes)}")
+
+        self.logger.info(f"Total number of nodes: {len(nodes)}")
+        # log_messages.append(f"Total number of nodes: {len(nodes)}")
         return nodes, log_messages
 
     def _total_node_number(self) -> int:
@@ -270,15 +274,15 @@ class EntityGraph:
     def _create_entity_edges(self, entities: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]], List[str]]:
         """Create edges for entity graph (dependencies)"""
         edges, log_messages = self._create_edges(entities, "INIT_ENTITY_GRAPH_EDGES", "CONTINUE_INIT_ENTITY_GRAPH_EDGES")
-        # self.logger.info(f"Created {len(edges)} entity graph edges")
-        log_messages.append(f"Created {len(edges)} entity graph edges")
+        self.logger.info(f"Created {len(edges)} entity graph edges")
+        # log_messages.append(f"Created {len(edges)} entity graph edges")
         return edges, log_messages
     
     def _create_relation_edges(self, entities: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]], List[str]]:
         """Create edges for relation graph"""
         edges, log_messages = self._create_edges(entities, "INIT_RELATION_GRAPH_EDGES", "CONTINUE_INIT_RELATION_GRAPH_EDGES")
-        # self.logger.info(f"Created {len(edges)} relation graph edges")
-        log_messages.append(f"Created {len(edges)} relation graph edges")
+        self.logger.info(f"Created {len(edges)} relation graph edges")
+        # log_messages.append(f"Created {len(edges)} relation graph edges")
         return edges, log_messages
     
     def _create_edges(self, entities: List[Dict[str, str]], init_prompt_key: str, continue_prompt_key: str) -> Tuple[List[Dict[str, str]], List[str]]:
@@ -304,14 +308,14 @@ class EntityGraph:
                 new_edges = result.get("edges", [])
                 
                 if not new_edges:
-                    # self.logger.info(f"No new edges in iteration {iteration+1}")
-                    log_messages.append(f"No new edges in iteration {iteration+1}")
+                    self.logger.info(f"No new edges in iteration {iteration+1}")
+                    # log_messages.append(f"No new edges in iteration {iteration+1}")
                     break
                     
                 edges.extend(new_edges)
-                # self.logger.info(f"Added {len(new_edges)} edges in iteration {iteration+1}")
-                log_messages.append(f"Added {len(new_edges)} edges in iteration {iteration+1}")
-                
+                self.logger.info(f"Added {len(new_edges)} edges in iteration {iteration+1}")
+                # log_messages.append(f"Added {len(new_edges)} edges in iteration {iteration+1}")
+
                 endpoint = result.get("endpoint", True)
                 if isinstance(endpoint, str):
                     endpoint = endpoint.lower() == "true"
@@ -319,8 +323,8 @@ class EntityGraph:
                     endpoint = endpoint
                 else:
                     error_msg = f"Unexpected endpoint type: {type(endpoint)}"
-                    # self.logger.error(error_msg)
-                    log_messages.append(error_msg)
+                    self.logger.error(error_msg)
+                    # log_messages.append(error_msg)
                     raise ValueError(error_msg)
                     
                 messages.append(response)
@@ -328,8 +332,8 @@ class EntityGraph:
                 
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse edges: {e}"
-                # self.logger.error(error_msg)
-                log_messages.append(error_msg)
+                self.logger.error(error_msg)
+                # log_messages.append(error_msg)
                 break
                 
         return edges, log_messages
@@ -353,11 +357,11 @@ class EntityGraph:
             if source and target and source in G and target in G:
                 G.add_edge(source, target, **edge)
                 edge_count += 1
-                
-        # self.logger.info(f"Built graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
-        log_messages.append(f"Built graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
-        log_messages.append(f"Added {node_count} nodes and {edge_count} edges to graph")
-        
+
+        self.logger.info(f"Built graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+        # log_messages.append(f"Built graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+        # log_messages.append(f"Added {node_count} nodes and {edge_count} edges to graph")
+
         return G, log_messages
     
     def _initialize_node_states(self):
@@ -382,9 +386,9 @@ class EntityGraph:
                 
             if node_updated:
                 initialized_count += 1
-                
-        # self.logger.info(f"Initialized states for {initialized_count} nodes")
-        log_messages.append(f"Initialized states for {initialized_count} nodes")
+
+        self.logger.info(f"Initialized states for {initialized_count} nodes")
+        # log_messages.append(f"Initialized states for {initialized_count} nodes")
         return log_messages
     
     def _clustering(self):
@@ -394,20 +398,20 @@ class EntityGraph:
         try:
             import igraph as ig
             import leidenalg
-            # self.logger.info("Using leidenalg/igraph for community detection")
-            log_messages.append("Using leidenalg/igraph for community detection")
+            self.logger.info("Using leidenalg/igraph for community detection")
+            # log_messages.append("Using leidenalg/igraph for community detection")
         except ImportError:
-            # self.logger.warning("leidenalg/igraph not installed; assigning all nodes to community 0")
-            log_messages.append("leidenalg/igraph not installed; assigning all nodes to community 0")
-            
+            self.logger.warning("leidenalg/igraph not installed; assigning all nodes to community 0")
+            # log_messages.append("leidenalg/igraph not installed; assigning all nodes to community 0")
+
             node_count = 0
             for node in self.relation_graph.nodes():
                 self.relation_graph.nodes[node]["community"] = 0
                 self.entity_graph.nodes[node]["community"] = 0
                 node_count += 1
-                
-            # self.logger.info(f"Assigned {node_count} nodes to default community 0")
-            log_messages.append(f"Assigned {node_count} nodes to default community 0")
+
+            self.logger.info(f"Assigned {node_count} nodes to default community 0")
+            # log_messages.append(f"Assigned {node_count} nodes to default community 0")
             return log_messages
         
         # Convert to undirected graph for community detection
@@ -427,13 +431,13 @@ class EntityGraph:
             weights = [ud_graph.get_edge_data(u, v).get('weight', 1.0) for u, v in ud_graph.edges()]
             ig_g.es['weight'] = weights
             partition = leidenalg.find_partition(ig_g, leidenalg.RBConfigurationVertexPartition, weights='weight')
-            # self.logger.info("Using weighted community detection")
-            log_messages.append("Using weighted community detection")
+            self.logger.info("Using weighted community detection")
+            # log_messages.append("Using weighted community detection")
         else:
             partition = leidenalg.find_partition(ig_g, leidenalg.RBConfigurationVertexPartition)
-            # self.logger.info("Using unweighted community detection")
-            log_messages.append("Using unweighted community detection")
-        
+            self.logger.info("Using unweighted community detection")
+            # log_messages.append("Using unweighted community detection")
+
         # Assign communities
         community_counts = {}
         for comm_id, community in enumerate(partition):
@@ -445,9 +449,9 @@ class EntityGraph:
                 if comm_id not in community_counts:
                     community_counts[comm_id] = 0
                 community_counts[comm_id] += 1
-                
-        # self.logger.info(f"Community detection completed with {len(partition)} communities")
-        log_messages.append(f"Community detection completed with {len(partition)} communities")
+
+        self.logger.info(f"Community detection completed with {len(partition)} communities")
+        # log_messages.append(f"Community detection completed with {len(partition)} communities")
         return log_messages
     
     def get_hint_message(self) -> Tuple[str, bool, List[str]]:
@@ -459,52 +463,51 @@ class EntityGraph:
         
         if selection is None or selection[0] is None:
             # All information collected, generate final hint
-            # self.logger.info("All nodes processed, generating accomplishment hint")
-            log_messages.append("All nodes processed, generating accomplishment hint")
-            
+            self.logger.info("All nodes processed, generating accomplishment hint")
+            # log_messages.append("All nodes processed, generating accomplishment hint")
+
             prompt = self.prompts.get(
                 "HINT_MESSAGE_ACCOMPLISH",
                 collected=self._serialize_nodes_with_value(self.entity_graph),
-                purpose=self.target, 
+                purpose=self.target,
                 language=self.language
             )
             response = self.graph_model.invoke([SystemMessage(content=prompt)])
             hint_message = response.content
             self.accomplish = True
-            
-            # self.logger.info("Generated accomplishment hint")
-            log_messages.append("Generated accomplishment hint")
+
+            self.logger.info("Generated accomplishment hint")
+            # log_messages.append("Generated accomplishment hint")
         else:
             # Generate hint for next node
             node_id, node_data = selection[0], selection[1]
-            # self.logger.info(f"Generating hint for node {node_id}: {node_data.get('name', '')}")
-            log_messages.append(f"Generating hint for node {node_id}: {node_data.get('name', '')}")
-            
+            self.logger.info(f"Generating hint for node {node_id}: {node_data.get('name', '')}")
+            # log_messages.append(f"Generating hint for node {node_id}: {node_data.get('name', '')}")
+
             prompt = self.prompts.get(
                 "HINT_MESSAGE_RETRIEVE",
                 collected=self._serialize_nodes_with_value(self.entity_graph),
                 recommendation=self._serialize_node_info(node_data),
-                purpose=self.target, 
+                purpose=self.target,
                 language=self.language
             )
             response = self.graph_model.invoke([SystemMessage(content=prompt)])
             hint_message = response.content
-            
-            # self.logger.info(f"Generated hint for node {node_id}")
-            log_messages.append(f"Generated hint for node {node_id}")
-            
+
+            self.logger.info(f"Generated hint for node {node_id}")
+            # log_messages.append(f"Generated hint for node {node_id}")
+
         total_nodes = self._total_node_number()
         accomplished_nodes = self._accomplished_node_number()
         remaining_nodes = self._remaining_node_number()
-        
-        # self.logger.info(f"Total number of nodes in the graph: {total_nodes}")
-        # self.logger.info(f"Accomplished number of nodes: {accomplished_nodes}")
-        # self.logger.info(f"Remaining number of nodes: {remaining_nodes}")
-        
-        log_messages.append(f"Total number of nodes in the graph: {total_nodes}")
-        log_messages.append(f"Accomplished number of nodes: {accomplished_nodes}")
-        log_messages.append(f"Remaining number of nodes: {remaining_nodes}")
-        
+
+        self.logger.info(f"Total number of nodes in the graph: {total_nodes}")
+        self.logger.info(f"Accomplished number of nodes: {accomplished_nodes}")
+        self.logger.info(f"Remaining number of nodes: {remaining_nodes}")
+        # log_messages.append(f"Total number of nodes in the graph: {total_nodes}")
+        # log_messages.append(f"Accomplished number of nodes: {accomplished_nodes}")
+        # log_messages.append(f"Remaining number of nodes: {remaining_nodes}")
+
         return hint_message, self.accomplish, log_messages
     
     def accept_message(
@@ -529,23 +532,27 @@ class EntityGraph:
         log_messages = []
 
         if is_image_report:
-            log_messages.append("Processing image analysis report...")
+            self.logger.info("Processing image analysis report...")
+            # log_messages.append("Processing image analysis report...")
         else:
-            log_messages.append("Processing user message...")
+            self.logger.info("Processing user message...")
+            # log_messages.append("Processing user message...")
 
         updated_nodes, new_nodes, extract_messages = self._process_user_message(
             hint_message, query_message, user_message, is_image_report=is_image_report
         )
         log_messages.extend(extract_messages)
 
-        log_messages.append(f"Updated {len(updated_nodes)} existing nodes and added {len(new_nodes)} new nodes")
+        self.logger.info(f"Updated {len(updated_nodes)} existing nodes and added {len(new_nodes)} new nodes")
+        # log_messages.append(f"Updated {len(updated_nodes)} existing nodes and added {len(new_nodes)} new nodes")
 
         update_messages = self._update_graph(updated_nodes, new_nodes)
         log_messages.extend(update_messages)
 
         # Re-cluster if significant changes from image report
         if is_image_report and (len(new_nodes) > 0 or len(updated_nodes) > 3):
-            log_messages.append("Significant graph changes from image report, re-clustering...")
+            self.logger.info("Significant graph changes from image report, re-clustering...")
+            # log_messages.append("Significant graph changes from image report, re-clustering...")
             clustering_messages = self._clustering()
             log_messages.extend(clustering_messages)
 
@@ -589,15 +596,14 @@ class EntityGraph:
                 continue
                 
             available.append((node_id, data))
-                
-        # self.logger.info(f"Found {len(available)} available nodes")
-        # self.logger.debug(f"Filtered nodes: {status_filtered} by status, {hit_filtered} by hit threshold, " +
-        #                  f"{weight_filtered} by weight threshold, {prereq_filtered} by prerequisites")
-        
-        log_messages.append(f"Found {len(available)} available nodes")
-        log_messages.append(f"Filtered nodes: {status_filtered} by status, {hit_filtered} by hit threshold, " +
+
+        self.logger.info(f"Found {len(available)} available nodes")
+        self.logger.debug(f"Filtered nodes: {status_filtered} by status, {hit_filtered} by hit threshold, " +
                          f"{weight_filtered} by weight threshold, {prereq_filtered} by prerequisites")
-        
+        # log_messages.append(f"Found {len(available)} available nodes")
+        # log_messages.append(f"Filtered nodes: {status_filtered} by status, {hit_filtered} by hit threshold, " +
+        #                  f"{weight_filtered} by weight threshold, {prereq_filtered} by prerequisites")
+
         return available, log_messages
     
     def _select_node(self) -> Optional[Tuple[str, Dict[str, Any], List[str]]]:
@@ -607,8 +613,8 @@ class EntityGraph:
         log_messages.extend(available_messages)
         
         if not available_nodes:
-            # self.logger.info("No available nodes for selection")
-            log_messages.append("No available nodes for selection")
+            self.logger.info("No available nodes for selection")
+            # log_messages.append("No available nodes for selection")
             return None, None, log_messages
         
         # Calculate PageRank
@@ -655,14 +661,15 @@ class EntityGraph:
                 f"Node {nid}: weight={weights[i]:.3f}, entropy={entropies[i]:.3f}, "
                 f"topology={topologies[i]:.3f}, community={communities[i]:.3f}, score={scores[i]:.3f}"
             )
-            # self.logger.debug(score_info)
-        
+            self.logger.debug(score_info)
+            # log_messages.append(score_info)
+
         # Update hit counter
         self.entity_graph.nodes[best_node_id]["hit"] += 1
         self.prev_node = best_node_id
-        
-        # self.logger.info(f"Selected node {best_node_id} ({best_data.get('name', '')}) with score {best_score:.3f}")
-        log_messages.append(f"Selected node {best_node_id} ({best_data.get('name', '')}) with score {best_score:.3f}")
+
+        self.logger.info(f"Selected node {best_node_id} ({best_data.get('name', '')}) with score {best_score:.3f}")
+        # log_messages.append(f"Selected node {best_node_id} ({best_data.get('name', '')}) with score {best_score:.3f}")
         return best_node_id, best_data, log_messages
     
     def _calculate_community_score(self, cand_id: str, cand_data: Dict[str, Any]) -> float:
@@ -726,9 +733,11 @@ class EntityGraph:
         endpoint = False
 
         if is_image_report:
-            log_messages.append("Processing image analysis report to extract information")
+            self.logger.info("Processing image analysis report to extract information")
+            # log_messages.append("Processing image analysis report to extract information")
         else:
-            log_messages.append("Processing user message to extract information")
+            self.logger.info("Processing user message to extract information")
+            # log_messages.append("Processing user message to extract information")
 
         while not endpoint and iteration < 10:
             if iteration == 0:
@@ -772,7 +781,8 @@ class EntityGraph:
                 extract_info["exist_nodes"].extend(exist_nodes)
                 extract_info["new_nodes"].extend(new_nodes)
 
-                log_messages.append(f"Iteration {iteration+1}: Extracted {len(exist_nodes)} existing nodes and {len(new_nodes)} new nodes")
+                self.logger.info(f"Iteration {iteration+1}: Extracted {len(exist_nodes)} existing nodes and {len(new_nodes)} new nodes")
+                # log_messages.append(f"Iteration {iteration+1}: Extracted {len(exist_nodes)} existing nodes and {len(new_nodes)} new nodes")
 
                 messages.append(response)
                 endpoint = result.get("endpoint", True)
@@ -782,19 +792,22 @@ class EntityGraph:
                     endpoint = endpoint
                 else:
                     error_msg = f"Unexpected endpoint type: {type(endpoint)}"
-                    log_messages.append(error_msg)
+                    self.logger.error(error_msg)
+                    # log_messages.append(error_msg)
                     raise ValueError(error_msg)
 
                 iteration += 1
 
                 # Break if no new information
                 if not exist_nodes and not new_nodes:
-                    log_messages.append("No new information extracted, breaking extraction loop")
+                    self.logger.info("No new information extracted, breaking extraction loop")
+                    # log_messages.append("No new information extracted, breaking extraction loop")
                     break
 
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse extraction response: {e}"
-                log_messages.append(error_msg)
+                self.logger.error(error_msg)
+                # log_messages.append(error_msg)
                 break
 
         # Update existing nodes
@@ -835,7 +848,8 @@ class EntityGraph:
                 else:
                     self.entity_graph.nodes[node_id]["status"] = 1
 
-            log_messages.append(f"Updated node {node_id} with value: {value[:50]}...")
+            self.logger.info(f"Updated node {node_id} with value: {value[:50]}...")
+            # log_messages.append(f"Updated node {node_id} with value: {value[:50]}...")
 
         # Add new nodes
         new_nodes = []
@@ -847,7 +861,8 @@ class EntityGraph:
             confidential_level = entry.get("confidential_level", 0.0)
 
             if relevance < self.relevance_threshold:
-                log_messages.append(f"Skipping node {name} with low relevance: {relevance:.2f}")
+                self.logger.info(f"Skipping node {name} with low relevance: {relevance:.2f}")
+                # log_messages.append(f"Skipping node {name} with low relevance: {relevance:.2f}")
                 continue
 
             if not name or not value:
@@ -876,7 +891,8 @@ class EntityGraph:
             self.relation_graph.add_node(node_id, **new_node_data)
             new_nodes.append(node_id)
 
-            log_messages.append(f"Added new node {node_id}: {name}")
+            self.logger.info(f"Added new node {node_id}: {name}")
+            # log_messages.append(f"Added new node {node_id}: {name}")
 
         return updated_nodes, new_nodes, log_messages
     
@@ -885,8 +901,8 @@ class EntityGraph:
         log_messages = []
         
         if not updated_nodes:
-            # self.logger.info("No nodes updated, skipping graph update")
-            log_messages.append("No nodes updated, skipping graph update")
+            self.logger.info("No nodes updated, skipping graph update")
+            # log_messages.append("No nodes updated, skipping graph update")
             return log_messages
             
         # Get neighbors of updated nodes
@@ -897,8 +913,8 @@ class EntityGraph:
             all_neighbors.extend(neighbors)
         
         if not all_neighbors:
-            # self.logger.info("No neighbors to update")
-            log_messages.append("No neighbors to update")
+            self.logger.info("No neighbors to update")
+            # log_messages.append("No neighbors to update")
             return log_messages
             
         # Update weights and uncertainties in chunks
@@ -936,21 +952,21 @@ class EntityGraph:
                         self.entity_graph.nodes[node_id]["uncertainty"] = update.get("uncertainty", old_uncertainty)
                         
                         update_count += 1
-                        # self.logger.info(f"Updated node {node_id}: {update.get('update_reason', 'No reason')}")
-                        log_messages.append(f"Updated node {node_id}: {update.get('update_reason', 'No reason')}")
-                        
-                # self.logger.info(f"Updated {update_count} nodes in chunk {i//chunk_size + 1}")
-                log_messages.append(f"Updated {update_count} nodes in chunk {i//chunk_size + 1}")
-                
+                        self.logger.info(f"Updated node {node_id}: {update.get('update_reason', 'No reason')}")
+                        # log_messages.append(f"Updated node {node_id}: {update.get('update_reason', 'No reason')}")
+
+                self.logger.info(f"Updated {update_count} nodes in chunk {i//chunk_size + 1}")
+                # log_messages.append(f"Updated {update_count} nodes in chunk {i//chunk_size + 1}")
+
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse update response: {e}"
-                # self.logger.error(error_msg)
-                log_messages.append(error_msg)
-        
+                self.logger.error(error_msg)
+                # log_messages.append(error_msg)
+
         # Re-cluster if new nodes added
         if new_nodes:
-            # self.logger.info("Re-clustering graph due to new nodes")
-            log_messages.append("Re-clustering graph due to new nodes")
+            self.logger.info("Re-clustering graph due to new nodes")
+            # log_messages.append("Re-clustering graph due to new nodes")
             clustering_messages = self._clustering()
             log_messages.extend(clustering_messages)
             

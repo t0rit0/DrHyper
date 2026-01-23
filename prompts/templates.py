@@ -1,7 +1,7 @@
 from .base import BasePrompt
 
 IMAGE_ANALYSIS_QUERY = """
-You are a medical diagnostic expert with expertise in analyzing medical images. Analyze the provided medical image(s) and generate a comprehensive analysis report.
+You are a medical imaging expert specializing in extracting and reporting information from medical images. Your task is to analyze the provided medical image(s) and comprehensively report all visible information.
 
 【Diagnostic Context】
 Target: ${target}
@@ -12,33 +12,63 @@ The following information has been collected during the consultation:
 ${graph_context}
 
 【Image Analysis Task】
-Please perform a detailed medical image analysis considering:
+Perform a comprehensive analysis and extract ALL visible information from the image:
 
 1. **Image Identification**
-   - Identify the type of medical image (ECG, X-ray, CT, MRI, ultrasound, etc.)
+   - Identify the type of medical image (ECG, X-ray, CT, MRI, ultrasound, laboratory report, pathology report, etc.)
    - Note the view/projection if applicable
-   - Identify any relevant technical parameters
+   - Identify technical parameters
 
-2. **Systematic Evaluation**
-   - Scan the entire image systematically
-   - Identify normal and abnormal findings
-   - Describe the location, size, shape, and characteristics of any abnormalities
-   - Assess the severity and clinical significance
+2. **Data Extraction (CRITICAL)**
+   For laboratory reports, test results, or any document-type images:
+   - Extract ALL numerical values with their units
+   - Extract ALL test names and their corresponding results
+   - Extract ALL reference ranges if visible
+   - Extract ALL textual information including patient info, dates, hospital names
+   - Note which values are marked as abnormal (highlighted, flagged, or outside reference range)
+   - Report data in a clear, structured format (e.g., "WBC: 11.5×10^9/L (reference: 3.5-9.5)")
 
-3. **Contextual Analysis**
-   - Integrate findings with the already collected information shown above
-   - Consider how the image findings relate to the diagnostic target
-   - Identify any new critical information that should be investigated
+   For imaging studies (ECG, X-ray, CT, MRI, ultrasound):
+   - Describe waveform patterns, measurements, anatomical structures
+   - Report all visible numerical measurements (heart rate, intervals, dimensions, etc.)
+   - Describe locations, sizes, shapes of any abnormalities
 
-4. **Structured Report**
-   Provide a well-organized report with:
-   - **Summary**: Brief overview of key findings (2-3 sentences)
-   - **Detailed Findings**: Comprehensive description of all observations
+3. **What to INCLUDE**:
+   ✓ ALL numerical values visible in the image
+   ✓ ALL text and labels visible in the image
+   ✓ Measurement units and reference ranges
+   ✓ Patient information (name, age, gender, ID) if visible
+   ✓ Dates and timestamps
+   ✓ Hospital/clinic names
+   ✓ Visual characteristics of abnormalities
+   ✓ Any highlighted or flagged results
+
+4. **What to EXCLUDE** (DO NOT include):
+   ✗ Diagnostic conclusions or diagnoses (e.g., "patient has anemia")
+   ✗ Clinical interpretations (e.g., "this suggests infection")
+   ✗ Severity assessments (e.g., "severely abnormal")
+   ✗ Recommendations or suggestions (e.g., "recommend further testing")
+   ✗ Treatment suggestions
+   ✗ "Recommendations" sections
+
+【Important Distinction】
+- ✓ INCLUDE: "Hemoglobin: 95 g/L (reference: 110-150 g/L)" - This is factual data extraction
+- ✗ EXCLUDE: "Low hemoglobin suggests anemia, recommend iron studies" - This is interpretation and recommendation
 
 【Output Format】
-Provide a detailed, professional medical image analysis report in natural language. Use clear medical terminology while ensuring the report is understandable.
+Provide a comprehensive report with:
+- **Image Type**: Laboratory report / ECG / X-ray / CT / MRI / Other (specify)
+- **Extracted Data**: List ALL visible data, values, measurements, and text information
+- **Visual Observations**: Additional visual findings relevant for imaging studies
 
-Focus on describing what is observed in the image without making diagnostic conclusions or recommendations.
+CRITICAL REMINDERS:
+- Extract and report ALL visible numerical values and text
+- For lab reports: Do NOT simply say "results are shown" - actually list the values
+- Do NOT make diagnoses or provide recommendations
+- Do NOT say "values are elevated" - just report the value and its reference range
+- If you cannot read something clearly, state "unable to read" or "poorly visible"
+
+Your goal: Extract and present ALL factual information visible in the image without interpretation or recommendation.
 """
 
 ENTITY_RETRIEVE_PROMPT = """
@@ -64,9 +94,9 @@ Language: ${language}
 
 CONTINUE_ENTITY_RETRIEVE_PROMPT = """
 The token limit was reached. Please continue listing additional information entities required for the given purpose.
-Follow the same format and guidelines as before. 
+Follow the same format and guidelines as before.
 
-NOTES: 
+NOTES:
 1. Do not repeat previously listed entities
 2. Only return the JSON object with "endpoint" and "entities" keys
 3. Ensure all new entities are defined with the required attributes
@@ -131,7 +161,7 @@ Language: ${language}
 """
 
 CONTINUE_INIT_ENTITY_GRAPH_EDGES_PROMPT = """
-The token limit was reached. Please continue providing dependency edges. Follow the same format and rules. 
+The token limit was reached. Please continue providing dependency edges. Follow the same format and rules.
 
 NOTES:
 1. Do not repeat previously defined edges
@@ -165,7 +195,7 @@ Language: ${language}
 """
 
 CONTINUE_INIT_RELATION_GRAPH_EDGES_PROMPT = """
-The token limit was reached. Please continue providing relationship edges. Follow the same format and rules. 
+The token limit was reached. Please continue providing relationship edges. Follow the same format and rules.
 
 NOTES:
 1. Do not repeat previously defined edges
@@ -214,7 +244,7 @@ Language: ${language}
 """
 
 CONTINUE_EXTRACT_INFO_PROMPT = """
-The token limit was reached. Please continue extracting information. Follow the same format and rules. 
+The token limit was reached. Please continue extracting information. Follow the same format and rules.
 
 NOTES:
 1. Do not repeat previously defined nodes
@@ -305,7 +335,7 @@ All collected information: ${collected}
 """
 
 HYPERTENSION_CONSULTATION_TARGET = """
-You are a hypertension specialist responsible for conducting patient assessments and providing medical recommendations. Your clinical output must include: 
+You are a hypertension specialist responsible for conducting patient assessments and providing medical recommendations. Your clinical output must include:
 - A formal medical diagnosis including hypertension classification and risk stratification
 - Lifestyle recommendations
 - Drug suggestions
@@ -316,9 +346,9 @@ Final output requirements:
 2. [Diagnosis] Use medical terminology to provide a formal medical diagnosis including hypertension classification and risk stratification
 3. [Recommendations] Based on patient information and diagnosis, provide lifestyle recommendations, drug suggestions, and follow-up protocols
 
-Note: 
-Communication should be concise and polite, using a physician's tone and expectations rather than a list of questions. 
-Pay attention to patient emotions and guide patients to answer questions. 
+Note:
+Communication should be concise and polite, using a physician's tone and expectations rather than a list of questions.
+Pay attention to patient emotions and guide patients to answer questions.
 You need to engage in multi-turn dialogue with the patient, asking about required information once at a time (one medical indicator per question), gradually collecting information to achieve final diagnosis.
 
 Language for the communication: ${language}

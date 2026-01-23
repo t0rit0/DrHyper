@@ -767,11 +767,8 @@ class EntityGraph:
 
             messages.append(HumanMessage(content=prompt))
 
-            # Use graph_model for image reports, conv_model for user messages
-            if is_image_report:
-                response = self.graph_model.invoke(messages)
-            else:
-                response = self.conv_model.invoke(messages)
+
+            response = self.conv_model.invoke(messages)
 
             try:
                 result = parse_json_response(response.content)

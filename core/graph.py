@@ -7,10 +7,10 @@ from typing import Dict, List, Tuple, Optional, Any
 import networkx as nx
 import pickle
 
-from config.settings import ConfigManager
-from prompts.templates import GraphPrompts
-from utils.logging import get_logger
-from utils.aux import parse_json_response
+from drhyper.config.settings import ConfigManager
+from drhyper.prompts.templates import GraphPrompts
+from drhyper.utils.logging import get_logger
+from drhyper.utils.aux import parse_json_response
 from langchain.schema import AIMessage, SystemMessage, HumanMessage
 
 class EntityGraph:

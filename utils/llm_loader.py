@@ -9,7 +9,7 @@ from openai import OpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, TextIteratorStreamer
 from threading import Thread
 
-from config.settings import ConfigManager
+from drhyper.config.settings import ConfigManager
 
 class CustomChatModel(BaseChatModel):
     """Custom Chat Model that interfaces with OpenAI API compatible custom LLMs"""

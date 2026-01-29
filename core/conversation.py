@@ -4,11 +4,11 @@ from typing import List, Tuple, Optional, Dict, Any
 from langchain.schema import AIMessage, SystemMessage, HumanMessage, BaseMessage
 from html.parser import HTMLParser
 
-from config.settings import ConfigManager
+from drhyper.config.settings import ConfigManager
 from .graph import EntityGraph
 from .image_analyzer import ImageAnalyzer
-from prompts.templates import ConversationPrompts
-from utils.logging import get_logger
+from drhyper.prompts.templates import ConversationPrompts
+from drhyper.utils.logging import get_logger
 
 class ThinkParser(HTMLParser):
     """Parser for extracting think tags from AI responses"""

@@ -7,9 +7,9 @@ from pathlib import Path
 from datetime import datetime
 from langchain.schema import HumanMessage
 
-from config.settings import ConfigManager
-from utils.vision_loader import load_vision_model, VisionChatModel
-from utils.logging import get_logger
+from drhyper.config.settings import ConfigManager
+from drhyper.utils.vision_loader import load_vision_model, VisionChatModel
+from drhyper.utils.logging import get_logger
 
 
 class ImageStorage:

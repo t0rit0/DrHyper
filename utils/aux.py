@@ -1,7 +1,7 @@
 from __future__ import annotations
-from config.settings import ConfigManager
-from utils.llm_loader import load_chat_model
-from utils.vision_loader import load_vision_model
+from drhyper.config.settings import ConfigManager
+from drhyper.utils.llm_loader import load_chat_model
+from drhyper.utils.vision_loader import load_vision_model
 from typing import Optional, Tuple
 
 # ANSI color codes for terminal output

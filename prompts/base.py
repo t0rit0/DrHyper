@@ -1,7 +1,7 @@
 # base.py
 from typing import Dict, Any, List
 from string import Template
-from config.settings import ConfigManager
+from drhyper.config.settings import ConfigManager
 
 class BasePrompt:
     """Base class for prompt management"""

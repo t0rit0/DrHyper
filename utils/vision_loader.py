@@ -8,8 +8,8 @@ import base64
 import os
 from pathlib import Path
 
-from config.settings import ConfigManager
-from utils.logging import get_logger
+from drhyper.config.settings import ConfigManager
+from drhyper.utils.logging import get_logger
 
 try:
     from transformers import AutoModelForCausalLM, AutoProcessor

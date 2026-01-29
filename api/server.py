@@ -8,11 +8,11 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from config.settings import ConfigManager
-from core.conversation import LongConversation, GeneralConversation
-from prompts.templates import ConversationPrompts
-from utils.logging import get_logger
-from utils.aux import *
+from drhyper.config.settings import ConfigManager
+from drhyper.core.conversation import LongConversation, GeneralConversation
+from drhyper.prompts.templates import ConversationPrompts
+from drhyper.utils.logging import get_logger
+from drhyper.utils.aux import *
 
 logger = get_logger("APIServer")
 

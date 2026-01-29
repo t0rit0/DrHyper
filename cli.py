@@ -3,11 +3,11 @@ import argparse
 import os
 import sys
 
-from core.conversation import LongConversation
-from prompts.templates import ConversationPrompts
-from utils.logging import get_logger
-from config.settings import ConfigManager
-from utils.aux import *
+from drhyper.core.conversation import LongConversation
+from drhyper.prompts.templates import ConversationPrompts
+from drhyper.utils.logging import get_logger
+from drhyper.config.settings import ConfigManager
+from drhyper.utils.aux import *
 
 def get_patient_info():
     """Get patient information from user input"""

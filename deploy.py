@@ -5,10 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 import uvicorn
-from config.settings import ConfigManager
+from drhyper.config.settings import ConfigManager
 
 # Import the app from server.py
-from api import server
+from drhyper.api import server
 
 def check_requirements():
     """Check if all required packages are installed"""

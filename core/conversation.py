@@ -265,9 +265,15 @@ class LongConversation(BaseConversation):
             entity_graph_data = cache_dict["entity_graph"]
             relation_graph_data = cache_dict["relation_graph"]
 
+            # Determine edge key name (compatibility with different versions)
+            # Old format: uses 'edges'
+            # New format: uses 'links'
+            edge_key = "links" if "links" in entity_graph_data else "edges"
+            instance.logger.info(f"Using edge key: '{edge_key}'")
+
             # Deserialize NetworkX graphs
-            instance.plan_graph.entity_graph = nx.node_link_graph(entity_graph_data, edges="links")
-            instance.plan_graph.relation_graph = nx.node_link_graph(relation_graph_data, edges="links")
+            instance.plan_graph.entity_graph = nx.node_link_graph(entity_graph_data, edges=edge_key)
+            instance.plan_graph.relation_graph = nx.node_link_graph(relation_graph_data, edges=edge_key)
 
             # Restore graph state
             graph_state = cache_dict.get("graph_state", {})

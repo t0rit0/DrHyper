@@ -128,7 +128,169 @@ class LongConversation(BaseConversation):
             self.logger.info("Working directory already exists or not specified")
             # log_messages.append("Working directory already exists or not specified")
         return log_messages
-    
+
+    def to_cache_dict(self):
+        """
+        Convert conversation state to a lightweight dictionary for caching.
+        This excludes heavy objects like EntityGraph and ImageAnalyzer.
+
+        Returns:
+            Dictionary containing only serializable conversation state
+        """
+        from datetime import datetime
+        import networkx as nx
+
+        # Convert LangChain BaseMessage objects to dict
+        def message_to_dict(msg):
+            if hasattr(msg, 'type'):
+                return {
+                    "type": msg.type,
+                    "content": msg.content
+                }
+            return {
+                "type": msg.__class__.__name__,
+                "content": msg.content
+            }
+
+        # Serialize NetworkX graphs to JSON-compatible format
+        entity_graph_data = nx.node_link_data(self.plan_graph.entity_graph, edges="links")
+        relation_graph_data = nx.node_link_data(self.plan_graph.relation_graph, edges="links")
+
+        return {
+            "messages": [message_to_dict(m) for m in self.messages],
+            "entire_messages": [message_to_dict(m) for m in self.entire_messages],
+            "current_hint": self.current_hint,
+            "step": getattr(self, 'step', 0),
+            "think_history": self.think_history,
+            "message_reserve_turns": self.message_reserve_turns,
+            "target": self.target,
+            "routine": self.routine,
+            "visualize": self.visualize,
+            "working_directory": self.working_directory,
+            "stream": self.stream,
+            "entity_graph": entity_graph_data,  # Serialize graph to JSON
+            "relation_graph": relation_graph_data,  # Serialize graph to JSON
+            "graph_state": {
+                "step": self.plan_graph.step,
+                "accomplish": self.plan_graph.accomplish,
+                "prev_node": self.plan_graph.prev_node
+            },
+            "metadata": {
+                "cached_at": datetime.now().isoformat(),
+                "version": "2.1",  # Updated version with graph serialization
+                "message_count": len(self.messages),
+                "entity_graph_nodes": len(entity_graph_data['nodes']),
+                "entity_graph_edges": len(entity_graph_data['links']),
+                "relation_graph_nodes": len(relation_graph_data['nodes']),
+                "relation_graph_edges": len(relation_graph_data['links'])
+            }
+        }
+
+    @classmethod
+    def from_cache_dict(
+        cls,
+        cache_dict: dict,
+        conv_model,
+        graph_model
+    ):
+        """
+        Restore conversation from cached dictionary.
+
+        Args:
+            cache_dict: Cached conversation state dictionary
+            conv_model: Conversation LLM model
+            graph_model: Graph LLM model
+
+        Returns:
+            Restored LongConversation instance
+        """
+        from langchain.schema import HumanMessage, AIMessage, SystemMessage
+        import networkx as nx
+
+        # Create new instance with minimal initialization
+        instance = cls.__new__(cls)
+
+        # Set basic attributes
+        instance.config = ConfigManager()
+        instance.logger = get_logger(cls.__name__)
+        instance.chat_model = conv_model
+        instance.target = cache_dict.get("target", "")
+        instance.routine = cache_dict.get("routine")
+        instance.visualize = cache_dict.get("visualize", False)
+        instance.working_directory = cache_dict.get("working_directory")
+        instance.stream = cache_dict.get("stream", False)
+        instance.message_reserve_turns = cache_dict.get("message_reserve_turns", 2)
+
+        # Restore conversation state
+        instance.current_hint = cache_dict.get("current_hint", "")
+        instance.step = cache_dict.get("step", 0)
+        instance.think_history = cache_dict.get("think_history", [])
+
+        # Convert dict messages back to LangChain BaseMessage objects
+        def dict_to_message(msg_dict):
+            msg_type = msg_dict.get("type", "")
+            content = msg_dict.get("content", "")
+
+            if msg_type == "human":
+                return HumanMessage(content=content)
+            elif msg_type == "ai":
+                return AIMessage(content=content)
+            else:  # system or other
+                return SystemMessage(content=content)
+
+        instance.messages = [dict_to_message(m) for m in cache_dict.get("messages", [])]
+        instance.entire_messages = [dict_to_message(m) for m in cache_dict.get("entire_messages", [])]
+
+        # Initialize EntityGraph (creates empty graphs)
+        instance.plan_graph = EntityGraph(
+            target=instance.target,
+            graph_model=graph_model,
+            conv_model=conv_model,
+            routine=instance.routine,
+            visualize=instance.visualize,
+            working_directory=instance.working_directory,
+            # Use default parameters from config
+            node_hit_threshold=instance.config.system.node_hit_threshold,
+            confidential_threshold=instance.config.system.confidential_threshold,
+            relevance_threshold=instance.config.system.relevance_threshold,
+            weight_threshold=instance.config.system.weight_threshold,
+            alpha=instance.config.system.alpha,
+            beta=instance.config.system.beta,
+            gamma=instance.config.system.gamma
+        )
+
+        # Restore graph structures from cache (v2.1+)
+        if "entity_graph" in cache_dict and "relation_graph" in cache_dict:
+            instance.logger.info("Restoring graph structures from cache...")
+            entity_graph_data = cache_dict["entity_graph"]
+            relation_graph_data = cache_dict["relation_graph"]
+
+            # Deserialize NetworkX graphs
+            instance.plan_graph.entity_graph = nx.node_link_graph(entity_graph_data, edges="links")
+            instance.plan_graph.relation_graph = nx.node_link_graph(relation_graph_data, edges="links")
+
+            # Restore graph state
+            graph_state = cache_dict.get("graph_state", {})
+            instance.plan_graph.step = graph_state.get("step", 0)
+            instance.plan_graph.accomplish = graph_state.get("accomplish", False)
+            instance.plan_graph.prev_node = graph_state.get("prev_node")
+
+            instance.logger.info(f"Graphs restored: {instance.plan_graph.entity_graph.number_of_nodes()} nodes, "
+                               f"{instance.plan_graph.entity_graph.number_of_edges()} edges")
+        else:
+            instance.logger.warning("No graph data in cache (v2.0 format), using empty graphs")
+            instance.logger.info("Graph state will be empty until first message")
+
+        # Recreate ImageAnalyzer with current config
+        instance.image_analyzer = ImageAnalyzer(verbose=False)
+        instance.conv_prompts = ConversationPrompts()
+
+        metadata = cache_dict.get('metadata', {})
+        version = metadata.get('version', 'unknown')
+        instance.logger.info(f"Conversation restored from cache v{version}")
+
+        return instance
+
     def init_graph(self, save: bool = False):
         """Initialize the entity graph"""
         self.logger.info("Initializing entity graph...")
@@ -280,8 +442,9 @@ class LongConversation(BaseConversation):
         """
         Analyze images and enhance human message with analysis report.
 
-        This method provides graph context to the VLM by serializing nodes with values,
-        then combines the analysis report with the user's message.
+        This method uses a TWO-STEP process:
+        1. Quick classification: Identify image type without graph context
+        2. Detailed analysis: Use type-specific prompt with graph context
 
         Args:
             human_message: User's text message
@@ -292,24 +455,69 @@ class LongConversation(BaseConversation):
         """
         log_messages = []
         self.logger.info(f"Processing {len(images)} image(s) with VLM...")
-        # log_messages.append(f"Processing {len(images)} image(s) with VLM...")
 
-        # Get graph context for image analysis
+        # ============================================================
+        # STEP 1: Quick Classification (no graph context)
+        # ============================================================
+        self.logger.info("Step 1: Quick classification...")
+        log_messages.append("Step 1: Identifying image type...")
+
+        try:
+            classification = self.image_analyzer.quick_classify(
+                images=images,
+                image_type="base64",
+                user_message=human_message
+            )
+            image_type = classification.get("image_type", "Other Medical Image")
+            brief_content = classification.get("brief_content", "")
+            confidence = classification.get("confidence", 0.0)
+
+            self.logger.info(f"Classified as: {image_type} (confidence: {confidence})")
+            log_messages.append(f"Image type: {image_type}")
+            log_messages.append(f"Brief: {brief_content}")
+
+        except Exception as e:
+            error_msg = f"Quick classification failed: {e}"
+            self.logger.error(error_msg)
+            log_messages.append(error_msg)
+            # Fallback to generic type
+            image_type = "Other Medical Image"
+            brief_content = "Classification failed, using generic analysis"
+            confidence = 0.0
+
+        # ============================================================
+        # STEP 2: Detailed Analysis (with graph context and type-specific prompt)
+        # ============================================================
+        self.logger.info("Step 2: Detailed analysis...")
+        log_messages.append("Step 2: Extracting detailed information...")
+
+        # Get graph context for detailed analysis
         graph_context = self.plan_graph._serialize_nodes_with_value(self.plan_graph.entity_graph)
         self.logger.info(f"Retrieved graph context: {len(graph_context)} chars")
-        # log_messages.append(f"Retrieved graph context: {len(graph_context)} chars")
 
-        # Build analysis query using template
+        # Determine which prompt to use based on image type
+        prompt_map = {
+            "Laboratory Report": "IMAGE_ANALYSIS_LAB_REPORT",
+            "ECG": "IMAGE_ANALYSIS_ECG",
+            "X-ray": "IMAGE_ANALYSIS_IMAGING",
+            "CT Scan": "IMAGE_ANALYSIS_IMAGING",
+            "MRI": "IMAGE_ANALYSIS_IMAGING",
+            "Ultrasound": "IMAGE_ANALYSIS_IMAGING",
+            "Pathology Report": "IMAGE_ANALYSIS_LAB_REPORT",
+        }
+
+        prompt_key = prompt_map.get(image_type, "IMAGE_ANALYSIS_GENERIC")
+
+        # Build type-specific analysis query
         analysis_query = self.conv_prompts.get(
-            "IMAGE_ANALYSIS_QUERY",
+            prompt_key,
             target=self.target,
             language=self.plan_graph.language,
-            graph_context=graph_context if graph_context.strip() else "No information collected yet."
+            graph_context=graph_context if graph_context.strip() else "No information collected yet.",
+            user_message=human_message
         )
 
-        # Analyze images using VLM
-        self.logger.info("Analyzing images with Vision Language Model...")
-        # log_messages.append("Analyzing images with Vision Language Model...")
+        # Analyze images using VLM with type-specific prompt
         try:
             analysis_report, image_logs = self.image_analyzer.analyze(
                 query=analysis_query,
@@ -317,20 +525,28 @@ class LongConversation(BaseConversation):
                 image_type="base64"
             )
             log_messages.extend(image_logs)
-            self.logger.info(f"Received image analysis report ({len(analysis_report)} chars)")
-            # log_messages.append(f"Received image analysis report ({len(analysis_report)} chars)")
+            self.logger.info(f"Received detailed analysis report ({len(analysis_report)} chars)")
+            log_messages.append("Detailed analysis complete")
         except Exception as e:
-            error_msg = f"Image analysis failed: {e}"
+            error_msg = f"Detailed analysis failed: {e}"
             self.logger.error(error_msg)
-            # log_messages.append(error_msg)
+            log_messages.append(error_msg)
             # Return original message and None report if analysis fails
             return human_message, None, log_messages
 
-        # Create structured analysis report
+        # ============================================================
+        # Create structured analysis report with classification info
+        # ============================================================
         analysis_report_dict = {
+            "classification": {
+                "image_type": image_type,
+                "brief_content": brief_content,
+                "confidence": confidence
+            },
             "findings": [
-                "影像已接收 / Image received",
-                "AI 正在分析 / AI analyzing",
+                f"影像类型 / Image Type: {image_type}",
+                f"简要描述 / Brief: {brief_content}",
+                "AI 正在生成详细分析 / AI is generating detailed analysis",
                 analysis_report[:500] + "..." if len(analysis_report) > 500 else analysis_report
             ],
             "full_report": analysis_report,
@@ -338,14 +554,25 @@ class LongConversation(BaseConversation):
             "image_count": len(images)
         }
 
-        # Enhance human message with analysis report
+        # Enhance human message with classification and analysis report
         if human_message.strip():
-            enhanced_message = f"{human_message}\n\n[Medical Image Analysis Report]\n{analysis_report}"
+            enhanced_message = f"""{human_message}
+
+[Image Classification]
+Type: {image_type}
+Brief: {brief_content}
+
+[Detailed Analysis Report]
+{analysis_report}"""
         else:
-            enhanced_message = f"[Medical Image Analysis Report]\n{analysis_report}"
+            enhanced_message = f"""[Image Classification]
+Type: {image_type}
+Brief: {brief_content}
+
+[Detailed Analysis Report]
+{analysis_report}"""
 
         self.logger.info("Enhanced message with image analysis report")
-        # log_messages.append("Enhanced message with image analysis report")
 
         return enhanced_message, analysis_report_dict, log_messages
 

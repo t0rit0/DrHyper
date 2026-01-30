@@ -49,6 +49,10 @@ class EntityGraph:
         self.prev_node = None
         self.logger = get_logger(self.__class__.__name__)
 
+        # Initialize empty graphs (will be populated by init() or load_graphs())
+        self.entity_graph = nx.DiGraph()
+        self.relation_graph = nx.DiGraph()
+
         self._ensure_working_directory()
     
     def _ensure_working_directory(self):

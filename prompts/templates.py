@@ -1,5 +1,236 @@
 from .base import BasePrompt
 
+IMAGE_QUICK_CLASSIFY = """
+You are a medical image classification specialist. Your task is to quickly identify the type and briefly describe the content of the medical image(s).
+
+【User Message】
+${user_message}
+
+【Classification Task】
+For each image provided:
+1. **Image Type**: Classify into ONE of these categories:
+   - Laboratory Report (化验报告单/检验报告)
+   - ECG (心电图)
+   - X-ray (X光片)
+   - CT Scan (CT扫描)
+   - MRI (MRI扫描)
+   - Ultrasound (超声检查)
+   - Pathology Report (病理报告)
+   - Other Medical Image (其他医学影像)
+
+2. **Brief Content**: Short description (1-2 sentences) of what's visible in the image
+
+【Output Format】
+Return ONLY a JSON object (no markdown, no code blocks):
+```json
+{
+  "image_type": "category from above",
+  "brief_content": "short description",
+  "confidence": 0.0-1.0
+}
+```
+
+Be accurate and concise. This is for quick classification, not detailed analysis.
+"""
+
+# Laboratory Report specific prompt
+IMAGE_ANALYSIS_LAB_REPORT = """
+You are a medical laboratory report expert. Your task is to extract and report ALL visible information from the laboratory report image(s).
+
+【Diagnostic Context】
+Target: ${target}
+Language: ${language}
+
+【Current Knowledge Graph State】
+The following information has been collected during the consultation:
+${graph_context}
+
+【User Message】
+${user_message}
+
+【Data Extraction Task - CRITICAL】
+Extract ALL numerical values, text, and data from the laboratory report:
+
+1. **Patient Information** (if visible):
+   - Name, age, gender, ID
+   - Date and time of test
+   - Hospital/clinic name
+
+2. **Test Results** (EXTRACT ALL):
+   For EACH test item:
+   - Test name (in original language)
+   - Numerical value with unit
+   - Reference range (if provided)
+   - Abnormal indicator (highlighted, flagged, ↑, ↓, H, L, etc.)
+
+3. **Report Format Example**:
+   WBC: 11.5×10^9/L (reference: 3.5-9.5) ↑
+   Hemoglobin: 95 g/L (reference: 110-150 g/L) ↓
+   Platelet: 180×10^9/L (reference: 125-350) ✓
+
+4. **What to INCLUDE**:
+   ✓ ALL test items and values
+   ✓ ALL units and reference ranges
+   ✓ ALL abnormal indicators
+   ✓ ALL textual information
+
+5. **What to EXCLUDE**:
+   ✗ Diagnostic conclusions
+   ✗ Clinical interpretations
+   ✗ Severity assessments
+   ✗ Treatment recommendations
+
+【Output Format】
+Provide a comprehensive report listing ALL test results with values, units, and reference ranges.
+"""
+
+# ECG specific prompt
+IMAGE_ANALYSIS_ECG = """
+You are a cardiac electrocardiogram (ECG) specialist. Extract and report ALL visible information from the ECG.
+
+【Diagnostic Context】
+Target: ${target}
+Language: ${language}
+
+【Current Knowledge Graph State】
+${graph_context}
+
+【User Message】
+${user_message}
+
+【ECG Data Extraction Task】
+Extract ALL visible information from the ECG:
+
+1. **Patient Information**:
+   - Name, age, gender
+   - Date and time of ECG
+   - Hospital/clinic name
+
+2. **ECG Parameters** (extract ALL):
+   - Heart rate
+   - Rhythm (sinus, atrial fibrillation, etc.)
+   - P wave characteristics
+   - PR interval
+   - QRS duration
+   - QT/QTc interval
+   - Axis
+   - Any visible waveforms or abnormalities
+
+3. **What to INCLUDE**:
+   ✓ ALL numerical values and measurements
+   ✓ ALL visible text and labels
+   ✓ Waveform descriptions
+   ✓ Machine interpretation text (if present, quote it directly)
+
+4. **What to EXCLUDE**:
+   ✗ Your own diagnostic conclusion
+   ✗ Clinical interpretation
+   ✗ Severity assessment
+   ✗ Treatment suggestions
+
+【Output Format】
+Comprehensive report of ALL ECG parameters and measurements with values.
+"""
+
+# Imaging (X-ray, CT, MRI, Ultrasound) specific prompt
+IMAGE_ANALYSIS_IMAGING = """
+You are a medical imaging specialist. Extract and report ALL visible information from the imaging study (X-ray, CT, MRI, or Ultrasound).
+
+【Diagnostic Context】
+Target: ${target}
+Language: ${language}
+
+【Current Knowledge Graph State】
+${graph_context}
+
+【User Message】
+${user_message}
+
+【Imaging Data Extraction Task】
+Extract ALL visible information from the image:
+
+1. **Patient Information**:
+   - Name, age, gender
+   - Date and time of study
+   - Hospital/clinic name
+
+2. **Study Information**:
+   - Image type and view/projection
+   - Technical parameters (kVp, mA, slice thickness, etc.)
+   - Body part examined
+
+3. **Findings** (extract ALL visible):
+   - Anatomical structures
+   - Measurements and dimensions
+   - Abnormalities with locations, sizes, shapes
+   - Density/opacity descriptions
+   - Any visible text annotations
+
+4. **Report Text** (if present in image):
+   - Quote ALL visible report text
+   - Include ALL measurements and numerical values
+
+5. **What to INCLUDE**:
+   ✓ ALL visible numerical measurements
+   ✓ ALL text and labels
+   ✓ Anatomical descriptions
+   ✓ Technical parameters
+
+6. **What to EXCLUDE**:
+   ✗ Your own diagnostic conclusion
+   ✗ Clinical interpretation
+   ✗ Severity assessment
+   ✗ Treatment recommendations
+
+【Output Format】
+Comprehensive report of ALL visible information, measurements, and text.
+"""
+
+# Generic medical image prompt (fallback)
+IMAGE_ANALYSIS_GENERIC = """
+You are a medical information extraction expert. Extract and report ALL visible information from the medical image(s).
+
+【Diagnostic Context】
+Target: ${target}
+Language: ${language}
+
+【Current Knowledge Graph State】
+${graph_context}
+
+【User Message】
+${user_message}
+
+【Data Extraction Task】
+Extract ALL visible information from the image(s):
+
+1. **Identify Image Type**:
+   - What kind of medical image is this?
+   - What body part or test is shown?
+
+2. **Extract ALL Data**:
+   - ALL numerical values and measurements
+   - ALL text and labels
+   - Patient information (if visible)
+   - Dates and timestamps
+   - Hospital/clinic names
+   - Any report text
+
+3. **What to INCLUDE**:
+   ✓ ALL numerical values with units
+   ✓ ALL visible text
+   ✓ Measurements and dimensions
+   ✓ Reference ranges (if provided)
+
+4. **What to EXCLUDE**:
+   ✗ Diagnostic conclusions
+   ✗ Clinical interpretations
+   ✗ Severity assessments
+   ✗ Treatment recommendations
+
+【Output Format】
+Comprehensive report of ALL visible factual information.
+"""
+
 IMAGE_ANALYSIS_QUERY = """
 You are a medical imaging expert specializing in extracting and reporting information from medical images. Your task is to analyze the provided medical image(s) and comprehensively report all visible information.
 
@@ -447,6 +678,11 @@ class GraphPrompts(BasePrompt):
 class ConversationPrompts(BasePrompt):
     def __init__(self):
         self.prompt_templates = {
+            "IMAGE_QUICK_CLASSIFY": IMAGE_QUICK_CLASSIFY,
+            "IMAGE_ANALYSIS_LAB_REPORT": IMAGE_ANALYSIS_LAB_REPORT,
+            "IMAGE_ANALYSIS_ECG": IMAGE_ANALYSIS_ECG,
+            "IMAGE_ANALYSIS_IMAGING": IMAGE_ANALYSIS_IMAGING,
+            "IMAGE_ANALYSIS_GENERIC": IMAGE_ANALYSIS_GENERIC,
             "IMAGE_ANALYSIS_QUERY": IMAGE_ANALYSIS_QUERY,
             "HYPERTENSION_CONSULTATION_TARGET": HYPERTENSION_CONSULTATION_TARGET,
             "HYPERTENSION_ASSESSMENT_ROUTINE": HYPERTENSION_ASSESSMENT_ROUTINE

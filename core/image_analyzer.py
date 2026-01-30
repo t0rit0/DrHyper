@@ -156,6 +156,110 @@ class ImageAnalyzer:
         """Check if vision model is available"""
         return self.vision_model is not None
 
+    def quick_classify(
+        self,
+        images: List[str],
+        image_type: str = "base64",
+        user_message: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Quickly classify image type and get brief content description.
+        This step does NOT use graph context - just prompt + user message + image.
+
+        Args:
+            images: List of images (base64 strings, URLs, or file paths)
+            image_type: Type of image input: "base64", "url", or "path"
+            user_message: Optional user message to include in classification
+
+        Returns:
+            Dict with keys: image_type, brief_content, confidence
+
+        Raises:
+            ValueError: If vision model is not available
+        """
+        import json
+
+        if not self.is_available():
+            error_msg = "Vision model is not available. Please configure vision LLM settings."
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        self.logger.info(f"Quick classify: {len(images)} image(s)")
+
+        # Prepare simple message content (only images + user message, no graph context)
+        message_content = []
+
+        # Add images
+        for img in images:
+            if image_type == "base64":
+                if img.startswith("data:"):
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": img}
+                    })
+                else:
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img}"}
+                    })
+            elif image_type == "url":
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": img}
+                })
+            elif image_type == "path":
+                base64_data = self.storage.get_image_as_base64(img)
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": base64_data}
+                })
+
+        # Build simple classification query
+        classify_query = f"""User message: {user_message}
+
+Classify the medical image type and provide a brief description. Return ONLY a JSON object with:
+- image_type: "Laboratory Report", "ECG", "X-ray", "CT Scan", "MRI", "Ultrasound", "Pathology Report", or "Other Medical Image"
+- brief_content: 1-2 sentence description
+- confidence: 0.0-1.0
+
+JSON output:"""
+
+        message_content.append({
+            "type": "text",
+            "text": classify_query
+        })
+
+        # Invoke vision model
+        try:
+            response = self.vision_model.invoke([HumanMessage(content=message_content)])
+            response_text = response.content.strip()
+
+            # Try to extract JSON from response
+            # Remove markdown code blocks if present
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+
+            # Parse JSON
+            classification = json.loads(response_text)
+
+            self.logger.info(f"Classified as: {classification.get('image_type', 'unknown')}")
+            return classification
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse classification JSON: {e}")
+            self.logger.debug(f"Response was: {response_text}")
+            # Return default classification if JSON parsing fails
+            return {
+                "image_type": "Other Medical Image",
+                "brief_content": "Unable to classify",
+                "confidence": 0.0
+            }
+        except Exception as e:
+            self.logger.error(f"Quick classification failed: {e}")
+            raise
+
     def analyze(
         self,
         query: str,

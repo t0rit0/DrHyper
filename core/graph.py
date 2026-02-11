@@ -72,19 +72,33 @@ class EntityGraph:
         log_messages = ["Working directory already exists"]
         return log_messages
     
-    def init(self, save: bool = False):
-        """Initialize the graph"""
+    def init(self, save: bool = False, patient_context: Optional[Dict[str, Any]] = None):
+        """Initialize the graph
+
+        Args:
+            save: Whether to save graphs to disk
+            patient_context: Optional patient context with patient text records
+        """
         log_messages = []
-        init_messages = self._initialize_graph()
+
+        # if patient_context and patient_context.get("known_entities"):
+        #     prefill_messages = self._prefill_known_entities(patient_context["known_entities"])
+        #     log_messages.extend(prefill_messages)
+
+        patient_text_records = None
+        if patient_context and patient_context.get("patient_text_records"):
+            patient_text_records = patient_context["patient_text_records"]
+
+        init_messages = self._initialize_graph(patient_text_records=patient_text_records)
         log_messages.extend(init_messages)
-        
+
         clustering_messages = self._clustering()
         log_messages.extend(clustering_messages)
-        
+
         if save:
             save_messages = self.save_graphs(self.working_directory)
             log_messages.extend(save_messages)
-            
+
         return log_messages
     
     def save_graphs(self, output_dir: str):
@@ -133,18 +147,22 @@ class EntityGraph:
         # log_messages.append("Loaded graphs successfully")
         return log_messages
     
-    def _initialize_graph(self):
-        """Initialize entity and relation graphs using LLM"""
+    def _initialize_graph(self, patient_text_records: Optional[Dict[str, str]] = None):
+        """Initialize entity and relation graphs using LLM
+
+        Args:
+            patient_text_records: Optional patient text records for context during entity initialization
+        """
         log_messages = []
-        
+
         # Step 1: Retrieve entities
         # self.logger.info("Retrieving entities...")
         entities, entity_messages = self._retrieve_entities()
         log_messages.extend(entity_messages)
-        
+
         # Step 2: Initialize entity attributes
         # self.logger.info("Initializing entity attributes...")
-        nodes, node_messages = self._initialize_entity_attributes(entities)
+        nodes, node_messages = self._initialize_entity_attributes(entities, patient_text_records)
         log_messages.extend(node_messages)
         
         # Step 3: Create entity graph edges
@@ -159,18 +177,111 @@ class EntityGraph:
         
         # Build graphs
         # self.logger.info("Building graphs...")
-        self.entity_graph, entity_graph_messages = self._build_graph(nodes, entity_edges)
-        log_messages.extend(entity_graph_messages)
-        
-        self.relation_graph, relation_graph_messages = self._build_graph(nodes, relation_edges)
-        log_messages.extend(relation_graph_messages)
+        # 检查是否有预填充的节点需要保留
+        has_prefilled_nodes = self.entity_graph.number_of_nodes() > 0
+        has_new_nodes = len(nodes) > 0
+
+        if has_prefilled_nodes and not has_new_nodes:
+            # 有预填充节点但无新节点：保留现有图
+            self.logger.info("Preserving prefilled nodes, no new entities to add")
+            entity_graph_messages = []
+            relation_graph_messages = []
+        elif has_prefilled_nodes and has_new_nodes:
+            # 有预填充节点且有新节点：添加到现有图
+            entity_graph_messages = self._add_nodes_to_existing_graph(self.entity_graph, nodes, entity_edges)
+            log_messages.extend(entity_graph_messages)
+
+            relation_graph_messages = self._add_nodes_to_existing_graph(self.relation_graph, nodes, relation_edges)
+            log_messages.extend(relation_graph_messages)
+        else:
+            # 无预填充节点：创建新图
+            self.entity_graph, entity_graph_messages = self._build_graph(nodes, entity_edges)
+            log_messages.extend(entity_graph_messages)
+
+            self.relation_graph, relation_graph_messages = self._build_graph(nodes, relation_edges)
+            log_messages.extend(relation_graph_messages)
         
         # Initialize node states
         node_states_messages = self._initialize_node_states()
         log_messages.extend(node_states_messages)
         
         return log_messages
-    
+
+    # def _prefill_known_entities(self, known_entities: List[Any]) -> List[str]:
+    #     """预填充已知实体到图中
+
+    #     Args:
+    #         known_entities: 已知实体列表（来自 PatientContext，可以是 KnownEntity 或 dict）
+
+    #     Returns:
+    #         日志消息列表
+    #     """
+    #     log_messages = []
+    #     nodes_added = 0
+
+    #     for entity in known_entities:
+    #         # 处理 KnownEntity dataclass 或 dict
+    #         if hasattr(entity, 'entity_id'):  # KnownEntity dataclass
+    #             entity_id = entity.entity_id
+    #             name = entity.name
+    #             value = entity.value
+    #             original_confidence = entity.original_confidence
+    #             temporal_confidence = entity.temporal_confidence
+    #             source = entity.source
+    #             extracted_at = entity.extracted_at
+    #             metadata = entity.metadata if hasattr(entity, 'metadata') else {}
+    #         else:  # dict
+    #             entity_id = entity.get("entity_id", f"prefill_{nodes_added}")
+    #             name = entity.get("name", "")
+    #             value = entity.get("value", "")
+    #             original_confidence = entity.get("original_confidence", 0.7)
+    #             temporal_confidence = entity.get("temporal_confidence", original_confidence)
+    #             source = entity.get("source", "patient_record")
+    #             extracted_at = entity.get("extracted_at", datetime.now())
+    #             metadata = entity.get("metadata", {})
+
+    #         # 计算状态和不确定性
+    #         if temporal_confidence >= 0.7:
+    #             status = 2
+    #         elif temporal_confidence >= 0.4:
+    #             status = 1
+    #         else:
+    #             status = 0
+
+    #         uncertainty = 1.0 - temporal_confidence
+
+    #         # 构建节点数据
+    #         node_data = {
+    #             "id": entity_id,
+    #             "name": name,
+    #             "description": metadata.get("notes", f"预填充实体: {name}") if isinstance(metadata, dict) else f"预填充实体: {name}",
+    #             "value": value,
+    #             "weight": 1.0,  # 预填充实体默认权重
+    #             "uncertainty": uncertainty,
+    #             "confidential_level": temporal_confidence,  # 使用衰减后的置信度
+    #             "status": status,
+    #             "hit": 1,  # 预填充实体视为已访问
+    #             "community": 0,  # 将在 clustering 中更新
+    #             # 时间属性
+    #             "extracted_at": extracted_at,
+    #             "last_updated_at": extracted_at,
+    #             "source": source,
+    #             "original_confidential_level": original_confidence,
+    #             "temporal_confidence": temporal_confidence,
+    #             "freshness": self.temporal_calculator.calculate_freshness(extracted_at)
+    #         }
+
+    #         # 添加节点到两个图中
+    #         self.entity_graph.add_node(entity_id, **node_data)
+    #         self.relation_graph.add_node(entity_id, **node_data)
+    #         nodes_added += 1
+
+    #     if nodes_added > 0:
+    #         self.logger.info(f"Prefilled {nodes_added} known entities")
+    #         log_messages.append(f"Prefilled {nodes_added} known entities")
+
+    #     return log_messages
+
     def _retrieve_entities(self) -> Tuple[List[Dict[str, str]], List[str]]:
         """Retrieve entities needed for the target"""
         messages = []
@@ -234,18 +345,35 @@ class EntityGraph:
         
         return entities_with_ids, log_messages
     
-    def _initialize_entity_attributes(self, entities: List[Dict[str, str]]) -> Tuple[List[Dict[str, Any]], List[str]]:
-        """Initialize attributes for entities"""
+    def _initialize_entity_attributes(
+        self, entities: List[Dict[str, str]], patient_text_records: Optional[Dict[str, str]] = None
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Initialize attributes for entities
+
+        Args:
+            entities: List of entities to initialize
+            patient_text_records: Optional patient text records for context
+        """
         nodes = []
         log_messages = []
         chunk_size = 10
-        
+
+        # 格式化患者文本记录为上下文字符串
+        patient_context_str = ""
+        if patient_text_records:
+            patient_context_str = self._format_patient_text_records(patient_text_records)
+
         for i in range(0, len(entities), chunk_size):
             chunk = entities[i:i + chunk_size]
             entities_str = ", ".join([f"id: {e['id']}, name: {e['name']}" for e in chunk])
 
+            # 获取提示词，如果存在患者上下文则添加到提示词中
             prompt = self.prompts.get("INIT_GRAPH_ENTITY", purpose=self.target, entities=entities_str, language=self.language)
-                
+
+            # 如果有患者上下文，添加到提示词中
+            if patient_context_str:
+                prompt = f"{patient_context_str}\n\n{prompt}"
+
             response = self.graph_model.invoke([HumanMessage(content=prompt)])
 
             try:
@@ -384,7 +512,33 @@ class EntityGraph:
         # log_messages.append(f"Added {node_count} nodes and {edge_count} edges to graph")
 
         return G, log_messages
-    
+
+    def _add_nodes_to_existing_graph(
+        self, graph: nx.DiGraph, nodes: List[Dict[str, Any]], edges: List[Dict[str, str]]
+    ) -> List[str]:
+        """添加节点和边到现有图中（用于保留预填充节点）"""
+        log_messages = []
+
+        # 添加新节点
+        node_count = 0
+        for node in nodes:
+            node_id = node.get("id")
+            if node_id and node_id not in graph:
+                graph.add_node(node_id, **node)
+                node_count += 1
+
+        # 添加边
+        edge_count = 0
+        for edge in edges:
+            source = edge.get("source")
+            target = edge.get("target")
+            if source and target and source in graph and target in graph:
+                graph.add_edge(source, target, **edge)
+                edge_count += 1
+
+        self.logger.info(f"Added {node_count} nodes and {edge_count} edges to existing graph")
+        return log_messages
+
     def _initialize_node_states(self):
         """Initialize node states (value, hit, status)"""
         log_messages = []
@@ -1042,4 +1196,23 @@ class EntityGraph:
         info += f"- Hit: {node.get('hit', 0)} (number of times queried)\n"
         info += f"- Status: {node.get('status', 0)} (0 for unknown, 1 for low confidence, 2 for high confidence)\n"
         return info
+
+    def _format_patient_text_records(self, patient_text_records: Dict[str, str]) -> str:
+        """格式化患者文本记录为LLM提示词上下文
+
+        Args:
+            patient_text_records: 患者文本记录字典
+
+        Returns:
+            格式化后的患者上下文字符串
+        """
+        if not patient_text_records:
+            return ""
+
+        lines = ["【患者背景信息】"]
+        for field_name, text_value in patient_text_records.items():
+            if text_value and text_value.strip():
+                lines.append(f"\n{field_name}:\n{text_value}")
+
+        return "\n".join(lines)
 

@@ -7,10 +7,13 @@ from typing import Dict, List, Tuple, Optional, Any
 import networkx as nx
 import pickle
 
+from datetime import datetime
+
 from drhyper.config.settings import ConfigManager
 from drhyper.prompts.templates import GraphPrompts
 from drhyper.utils.logging import get_logger
 from drhyper.utils.aux import parse_json_response
+from drhyper.core.temporal_decay import TemporalDecayCalculator
 from langchain.schema import AIMessage, SystemMessage, HumanMessage
 
 class EntityGraph:
@@ -48,6 +51,9 @@ class EntityGraph:
         self.accomplish = False
         self.prev_node = None
         self.logger = get_logger(self.__class__.__name__)
+
+        # 时间衰减计算器
+        self.temporal_calculator = TemporalDecayCalculator()
 
         # Initialize empty graphs (will be populated by init() or load_graphs())
         self.entity_graph = nx.DiGraph()
@@ -241,9 +247,10 @@ class EntityGraph:
             prompt = self.prompts.get("INIT_GRAPH_ENTITY", purpose=self.target, entities=entities_str, language=self.language)
                 
             response = self.graph_model.invoke([HumanMessage(content=prompt)])
-            
+
             try:
-                chunk_nodes = parse_json_response(response.content)
+                result = parse_json_response(response.content)
+                chunk_nodes = result.get("entities", [])  # 获取实体数组
                 nodes.extend(chunk_nodes)
                 self.logger.info(f"Initialized attributes for chunk {i//chunk_size + 1}/{math.ceil(len(entities)/chunk_size)}")
                 # log_messages.append(f"Initialized attributes for chunk {i//chunk_size + 1}/{math.ceil(len(entities)/chunk_size)}")
@@ -252,6 +259,16 @@ class EntityGraph:
                 self.logger.error(error_msg)
                 # log_messages.append(error_msg)
                 raise
+
+        # 为每个节点添加时间属性
+        now = datetime.now()
+        for node in nodes:
+            node["extracted_at"] = now
+            node["last_updated_at"] = now
+            node["source"] = "conversation"
+            node["original_confidential_level"] = node.get("confidential_level", 0.5)
+            node["temporal_confidence"] = node.get("confidential_level", 0.5)
+            node["freshness"] = 1.0
 
         self.logger.info(f"Total number of nodes: {len(nodes)}")
         # log_messages.append(f"Total number of nodes: {len(nodes)}")
@@ -834,6 +851,16 @@ class EntityGraph:
             # Update node value and confidential_level
             self.entity_graph.nodes[node_id]["value"] = value
             self.entity_graph.nodes[node_id]["confidential_level"] = confidential_level
+            # update time freshness
+            self.entity_graph.nodes[node_id]["last_updated_at"] = datetime.now()
+            
+            if "original_confidential_level" not in self.entity_graph.nodes[node_id]:
+                self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
+            elif confidential_level > self.entity_graph.nodes[node_id]["original_confidential_level"]:
+                self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
+            
+            self.entity_graph.nodes[node_id]["temporal_confidence"] = confidential_level
+            self.entity_graph.nodes[node_id]["freshness"] = 1.0
 
             # Update status based on confidential_level
             if is_image_report:
@@ -875,6 +902,7 @@ class EntityGraph:
             else:
                 status = 2 if confidential_level >= self.confidential_threshold else 1
 
+            now = datetime.now()
             new_node_data = {
                 "id": node_id,
                 "name": name,
@@ -885,7 +913,14 @@ class EntityGraph:
                 "confidential_level": confidential_level,
                 "status": status,
                 "hit": 1,
-                "community": 0  # Will be updated in clustering
+                "community": 0,  # Will be updated in clustering
+                # 时间属性
+                "extracted_at": now,
+                "last_updated_at": now,
+                "source": "conversation",
+                "original_confidential_level": confidential_level,
+                "temporal_confidence": confidential_level,
+                "freshness": 1.0
             }
 
             self.entity_graph.add_node(node_id, **new_node_data)

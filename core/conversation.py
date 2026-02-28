@@ -152,9 +152,37 @@ class LongConversation(BaseConversation):
                 "content": msg.content
             }
 
+        # Helper function to convert datetime objects to ISO strings
+        def make_json_serializable(obj):
+            """Recursively convert datetime objects to ISO format strings."""
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            elif isinstance(obj, dict):
+                return {k: make_json_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [make_json_serializable(item) for item in obj]
+            return obj
+
         # Serialize NetworkX graphs to JSON-compatible format
-        entity_graph_data = nx.node_link_data(self.plan_graph.entity_graph, edges="links")
-        relation_graph_data = nx.node_link_data(self.plan_graph.relation_graph, edges="links")
+        # First get the raw data, then convert datetime objects
+        entity_graph_raw = nx.node_link_data(self.plan_graph.entity_graph, edges="links")
+        relation_graph_raw = nx.node_link_data(self.plan_graph.relation_graph, edges="links")
+
+        # Convert datetime objects in nodes and links
+        entity_graph_data = {
+            "nodes": [make_json_serializable(dict(node)) for node in entity_graph_raw.get("nodes", [])],
+            "links": [make_json_serializable(dict(link)) for link in entity_graph_raw.get("links", [])],
+            "directed": entity_graph_raw.get("directed", True),
+            "multigraph": entity_graph_raw.get("multigraph", False),
+            "graph": entity_graph_raw.get("graph", {})
+        }
+        relation_graph_data = {
+            "nodes": [make_json_serializable(dict(node)) for node in relation_graph_raw.get("nodes", [])],
+            "links": [make_json_serializable(dict(link)) for link in relation_graph_raw.get("links", [])],
+            "directed": relation_graph_raw.get("directed", True),
+            "multigraph": relation_graph_raw.get("multigraph", False),
+            "graph": relation_graph_raw.get("graph", {})
+        }
 
         return {
             "messages": [message_to_dict(m) for m in self.messages],
@@ -177,7 +205,7 @@ class LongConversation(BaseConversation):
             },
             "metadata": {
                 "cached_at": datetime.now().isoformat(),
-                "version": "2.1",  # Updated version with graph serialization
+                "version": "2.2",  # Updated version with datetime serialization
                 "message_count": len(self.messages),
                 "entity_graph_nodes": len(entity_graph_data['nodes']),
                 "entity_graph_edges": len(entity_graph_data['links']),
@@ -270,6 +298,30 @@ class LongConversation(BaseConversation):
             # New format: uses 'links'
             edge_key = "links" if "links" in entity_graph_data else "edges"
             instance.logger.info(f"Using edge key: '{edge_key}'")
+
+            # Helper function to convert ISO strings back to datetime objects
+            def parse_datetime_strings(obj):
+                """Recursively convert ISO datetime strings to datetime objects."""
+                from datetime import datetime
+                if isinstance(obj, dict):
+                    result = {}
+                    for k, v in obj.items():
+                        # Check for common datetime field names
+                        if k in ('extracted_at', 'last_updated_at') and isinstance(v, str):
+                            try:
+                                result[k] = datetime.fromisoformat(v)
+                            except (ValueError, TypeError):
+                                result[k] = v
+                        else:
+                            result[k] = parse_datetime_strings(v)
+                    return result
+                elif isinstance(obj, (list, tuple)):
+                    return [parse_datetime_strings(item) for item in obj]
+                return obj
+
+            # Convert datetime strings in node data
+            entity_graph_data = parse_datetime_strings(entity_graph_data)
+            relation_graph_data = parse_datetime_strings(relation_graph_data)
 
             # Deserialize NetworkX graphs
             instance.plan_graph.entity_graph = nx.node_link_graph(entity_graph_data, edges=edge_key)

@@ -49,18 +49,24 @@ class CustomChatModel(BaseChatModel):
             base_url=self.base_url,
         )
 
-    def _call(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> str:
+    def _call(self, messages: List[BaseMessage], stop: Optional[List[str]] = None,
+              response_format: Optional[dict] = None, **kwargs) -> str:
         client = self._create_client()
-        
-        completion = client.chat.completions.create(
-            model=self.model_name,
-            messages=[self._convert_message(msg) for msg in messages],
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            stream=False,
-            stop=stop,
-        )
-        
+
+        api_params = {
+            "model": self.model_name,
+            "messages": [self._convert_message(msg) for msg in messages],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "stream": False,
+            "stop": stop,
+        }
+
+        if response_format:
+            api_params["response_format"] = response_format
+
+        completion = client.chat.completions.create(**api_params)
+
         return completion.choices[0].message.content
 
     def _stream_response(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs) -> Iterator[str]:

@@ -14,6 +14,13 @@ from drhyper.prompts.templates import GraphPrompts
 from drhyper.utils.logging import get_logger
 from drhyper.utils.aux import parse_json_response
 from drhyper.core.temporal_decay import TemporalDecayCalculator
+from drhyper.core.schemas import (
+    ENTITY_RETRIEVE_SCHEMA,
+    ENTITY_NODES_SCHEMA,
+    ENTITY_EDGES_SCHEMA,
+    EXTRACT_INFO_SCHEMA,
+    UPDATE_GRAPH_SCHEMA
+)
 from langchain.schema import AIMessage, SystemMessage, HumanMessage
 
 class EntityGraph:
@@ -294,7 +301,7 @@ class EntityGraph:
             prompt += "\n" + routine_prompt
             
         messages.append(SystemMessage(content=prompt))
-        response = self.graph_model.invoke(messages)
+        response = self.graph_model.invoke(messages, response_format=ENTITY_RETRIEVE_SCHEMA)
         
         try:
             result = parse_json_response(response.content)
@@ -313,7 +320,7 @@ class EntityGraph:
             
             while not endpoint and iteration < 10:
                 messages.append(HumanMessage(content=self.prompts.get("CONTINUE_ENTITY_RETRIEVE")))
-                response = self.graph_model.invoke(messages)
+                response = self.graph_model.invoke(messages, response_format=ENTITY_RETRIEVE_SCHEMA)
                 result = parse_json_response(response.content)
                 
                 new_entities = result.get("entities", [])
@@ -374,7 +381,7 @@ class EntityGraph:
             if patient_context_str:
                 prompt = f"{patient_context_str}\n\n{prompt}"
 
-            response = self.graph_model.invoke([HumanMessage(content=prompt)])
+            response = self.graph_model.invoke([HumanMessage(content=prompt)], response_format=ENTITY_NODES_SCHEMA)
 
             try:
                 result = parse_json_response(response.content)
@@ -450,7 +457,7 @@ class EntityGraph:
                 prompt = self.prompts.get(continue_prompt_key)
                 
             messages.append(HumanMessage(content=prompt))
-            response = self.graph_model.invoke(messages)
+            response = self.graph_model.invoke(messages, response_format=ENTITY_EDGES_SCHEMA)
             
             try:
                 result = parse_json_response(response.content)
@@ -943,7 +950,7 @@ class EntityGraph:
             messages.append(HumanMessage(content=prompt))
 
 
-            response = self.conv_model.invoke(messages)
+            response = self.conv_model.invoke(messages, response_format=EXTRACT_INFO_SCHEMA)
 
             try:
                 result = parse_json_response(response.content)
@@ -984,12 +991,23 @@ class EntityGraph:
 
         # Update existing nodes
         updated_nodes = []
+        self.logger.info(f"Processing {len(extract_info.get('exist_nodes', []))} extracted nodes")
         for entry in extract_info.get("exist_nodes", []):
             node_id = entry.get("id")
             value = str(entry.get("value", "")).strip()
-            confidential_level = entry.get("confidential_level", 0.0)
+            # Convert confidential_level to float, handling string input from LLM
+            try:
+                confidential_level = float(entry.get("confidential_level", 0.0))
+            except (ValueError, TypeError):
+                confidential_level = 0.0
+
+            self.logger.info(f"Checking extracted node: id={node_id}, value_preview={value[:30] if value else 'empty'}, in_graph={node_id in self.entity_graph.nodes if node_id else False}")
 
             if not value or node_id not in self.entity_graph.nodes:
+                if not value:
+                    self.logger.warning(f"Skipping node {node_id}: empty value")
+                elif node_id not in self.entity_graph.nodes:
+                    self.logger.warning(f"Skipping node {node_id}: not found in graph. Available nodes: {list(self.entity_graph.nodes)[:10]}...")
                 continue
 
             updated_nodes.append(node_id)
@@ -1010,8 +1028,14 @@ class EntityGraph:
             
             if "original_confidential_level" not in self.entity_graph.nodes[node_id]:
                 self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
-            elif confidential_level > self.entity_graph.nodes[node_id]["original_confidential_level"]:
-                self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
+            else:
+                # Convert stored value to float in case it was stored as string
+                try:
+                    stored_level = float(self.entity_graph.nodes[node_id]["original_confidential_level"])
+                except (ValueError, TypeError):
+                    stored_level = 0.0
+                if confidential_level > stored_level:
+                    self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
             
             self.entity_graph.nodes[node_id]["temporal_confidence"] = confidential_level
             self.entity_graph.nodes[node_id]["freshness"] = 1.0
@@ -1039,8 +1063,23 @@ class EntityGraph:
             node_id = entry.get("id", f"v{uuid.uuid4().hex[:8]}")
             name = entry.get("name", "")
             value = str(entry.get("value", "")).strip()
-            relevance = entry.get("relevance", 0.0)
-            confidential_level = entry.get("confidential_level", 0.0)
+            # Convert numeric fields to proper types, handling string input from LLM
+            try:
+                relevance = float(entry.get("relevance", 0.0))
+            except (ValueError, TypeError):
+                relevance = 0.0
+            try:
+                confidential_level = float(entry.get("confidential_level", 0.0))
+            except (ValueError, TypeError):
+                confidential_level = 0.0
+            try:
+                weight = float(entry.get("weight", 1.0))
+            except (ValueError, TypeError):
+                weight = 1.0
+            try:
+                uncertainty = float(entry.get("uncertainty", 1.0))
+            except (ValueError, TypeError):
+                uncertainty = 1.0
 
             if relevance < self.relevance_threshold:
                 self.logger.info(f"Skipping node {name} with low relevance: {relevance:.2f}")
@@ -1125,8 +1164,8 @@ class EntityGraph:
                 collected=self._serialize_nodes_with_value(self.entity_graph),
                 relevant_nodes=relevant_nodes
             )
-            
-            response = self.graph_model.invoke([SystemMessage(content=prompt)])
+
+            response = self.graph_model.invoke([SystemMessage(content=prompt)], response_format=UPDATE_GRAPH_SCHEMA)
             
             try:
                 updates = parse_json_response(response.content)
@@ -1165,10 +1204,11 @@ class EntityGraph:
     def _serialize_nodes(self, graph: nx.DiGraph) -> str:
         """Serialize graph nodes for prompts"""
         serialized_nodes = []
-        serialize_keys = ["id", "name", "description"]
-        
+        serialize_keys = ["name", "description"]
+
         for node, attrs in graph.nodes(data=True):
-            attr_str = ", ".join(f"{key}: {attrs.get(key, '')}" for key in serialize_keys)
+            # Use node (the node ID) explicitly, then add other attributes
+            attr_str = f"id: {node}, " + ", ".join(f"{key}: {attrs.get(key, '')}" for key in serialize_keys)
             serialized_nodes.append(attr_str)
             
         return "\n".join(serialized_nodes)

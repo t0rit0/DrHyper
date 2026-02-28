@@ -355,7 +355,10 @@ IMPORTANT:
 - Information gain when answered: IG_i = H_i - H(x_i)
 
 OUTPUT:
-Return ONLY a JSON array containing all nodes with their attributes. The JSON must be parsable by Python's json.loads() without any additional text or formatting.
+Return a JSON object with:
+- "entities": array of node objects with their attributes
+
+The JSON must be parsable by Python's json.loads() without any additional text or formatting.
 
 Purpose: ${purpose}
 Entities to process: ${entities}
@@ -443,6 +446,7 @@ CRITICAL GUIDELINES:
 3. Ensure accurate assignment of information to corresponding entities
 4. Include units and maintain information completeness in values
 5. Consider the conversation context: HINT MESSAGE → AI MESSAGE → HUMAN MESSAGE
+6. LANGUAGE: Respond in the SAME language as the user's message (human_response)
 
 EXTRACTION TASKS:
 
@@ -495,12 +499,13 @@ UPDATE PRINCIPLES:
 5. Preserve original IDs and names
 
 OUTPUT:
-Return ONLY a JSON array of updated nodes, each containing:
-- id: Original node ID (unchanged)
-- name: Original node name (unchanged)
-- weight: Updated weight value
-- uncertainty: Updated uncertainty value
-- update_reason: Clear explanation of the update logic
+Return a JSON object with:
+- "updates": array of updated nodes, each containing:
+  - id: Original node ID (unchanged)
+  - name: Original node name (unchanged)
+  - weight: Updated weight value
+  - uncertainty: Updated uncertainty value
+  - update_reason: Clear explanation of the update logic
 
 Target purpose: ${purpose}
 New values provided: ${collected}
@@ -629,6 +634,7 @@ CRITICAL GUIDELINES:
 2. Only create new nodes when information doesn't fit any existing node
 3. Ensure accurate assignment of information to corresponding entities
 4. Include units and maintain information completeness in values
+5. LANGUAGE: Respond in the SAME language as the image analysis report
 
 EXTRACTION TASKS:
 

@@ -132,32 +132,25 @@ EXTRACT_INFO_SCHEMA = {
     }
 }
 
-# Schema 5: UPDATE_GRAPH - returns {updates: [{id, name, weight, uncertainty, update_reason}]}
+# Schema 5: UPDATE_GRAPH - returns [{id, name, weight, uncertainty, update_reason}]
 UPDATE_GRAPH_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
         "name": "update_graph",
         "strict": True,
         "schema": {
-            "type": "object",
-            "properties": {
-                "updates": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "name": {"type": "string"},
-                            "weight": {"type": "number"},
-                            "uncertainty": {"type": "number"},
-                            "update_reason": {"type": "string"}
-                        },
-                        "required": ["id", "name", "weight", "uncertainty", "update_reason"]
-                    }
-                }
-            },
-            "required": ["updates"],
-            "additionalProperties": False
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "weight": {"type": "number"},
+                    "uncertainty": {"type": "number"},
+                    "update_reason": {"type": "string"}
+                },
+                "required": ["id", "name", "weight", "uncertainty", "update_reason"]
+            }
         }
     }
 }

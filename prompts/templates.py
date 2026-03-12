@@ -303,21 +303,25 @@ Your goal: Extract and present ALL factual information visible in the image with
 """
 
 ENTITY_RETRIEVE_PROMPT = """
-Given a specific purpose, analyze it thoroughly and identify all information entities required to achieve it. When all necessary entities are provided, you should be able to completely answer or fulfill the stated purpose.
+Given a specific purpose, identify the **MOST ESSENTIAL** information entities required to achieve it.
+
+**CRITICAL CONSTRAINT: Maximum 5-10 entities total. Focus on quality over quantity.**
 
 GUIDELINES:
 - Entities must be specific and detailed (e.g., "patient age" instead of "medical condition")
-- Provide as many relevant entities as possible
+- Only include entities that are DIRECTLY NECESSARY for the purpose
 - Entities should have finite, calculable answer pools to enable uncertainty measurement
 - Split broad concepts into specific components (e.g., "drinking habits" → "alcohol consumption" and "drinking frequency")
 - Prioritize entities by importance, listing the most critical information first
+- **Do NOT include marginally relevant entities** - be selective and focused
+- When in doubt about an entity's necessity, EXCLUDE it
 
 FORMAT:
 Return ONLY a JSON object that can be parsed by Python's json.loads() function. Do not include markdown headers, code blocks, or any explanatory text.
 
 The JSON must contain:
 - "endpoint": boolean ("true" if all required entities are listed, "false" if token limit reached)
-- "entities": array of entity names as strings
+- "entities": array of entity names as strings (maximum 10 items)
 
 Target purpose: ${purpose}
 Language: ${language}
@@ -437,6 +441,58 @@ NOTES:
 3. Ensure all new edges are defined with the required attributes
 """
 
+INCREMENTAL_RELATION_GRAPH_EDGES_PROMPT = """
+Create medical relationship edges to integrate newly identified entities into the existing graph topology.
+
+【All Entities】(nodes that may have relationships with each other)
+${all_entities}
+Note: "new: true" indicates a newly added entity, "new: false" indicates an existing entity
+
+【Existing Graph Summary】
+${existing_graph_summary}
+
+【Edge Creation Rules】
+1. Create edges representing MEDICAL relationships between entities
+2. Focus on relationships involving new entities (new: true)
+3. Edge direction should reflect medical logic (causal, suggestive, correlative, etc.)
+4. Assign relationship type: causes, suggests, confirms, rules_out, co_occurs, correlates, associated_with
+5. Assign weight (0-1) based on relationship strength
+6. Provide reason for each edge
+7. CRITICAL: DO NOT create self-loop edges (source must NOT equal target)
+8. CRITICAL: DO NOT create duplicate edges (each source->target pair should appear only once)
+
+【Output Format】
+Return JSON object:
+{
+    "endpoint": true/false,
+    "edges": [
+        {
+            "source": "source node ID",
+            "target": "target node ID",
+            "relation": "relationship type",
+            "weight": 0.8,
+            "reason": "explanation of the relationship"
+        }
+    ]
+}
+
+Purpose: ${purpose}
+Language: ${language}
+
+Return ONLY valid JSON without any additional text.
+"""
+
+CONTINUE_INCREMENTAL_RELATION_GRAPH_EDGES_PROMPT = """
+Token 数量已达上限。请继续为新节点创建关联边。
+
+【注意】
+1. 不要重复之前已定义的边
+2. 只返回 JSON 对象，不要任何额外文本
+3. 确保所有新边都定义了必需的属性
+
+Return ONLY valid JSON without any additional text.
+"""
+
 EXTRACT_INFO_PROMPT = """
 Extract relevant information from the user's message and map it to the appropriate nodes in the information graph.
 
@@ -499,13 +555,12 @@ UPDATE PRINCIPLES:
 5. Preserve original IDs and names
 
 OUTPUT:
-Return a JSON object with:
-- "updates": array of updated nodes, each containing:
-  - id: Original node ID (unchanged)
-  - name: Original node name (unchanged)
-  - weight: Updated weight value
-  - uncertainty: Updated uncertainty value
-  - update_reason: Clear explanation of the update logic
+Return a JSON array of updated nodes, each containing:
+- id: Original node ID (unchanged)
+- name: Original node name (unchanged)
+- weight: Updated weight value
+- uncertainty: Updated uncertainty value
+- update_reason: Clear explanation of the update logic
 
 Target purpose: ${purpose}
 New values provided: ${collected}
@@ -558,28 +613,43 @@ List all entities and their collected values comprehensively
 [TARGET]
 State the complete conversation purpose without abbreviation: ${purpose}
 
+[KEY DIAGNOSTIC FINDINGS]
+The following findings have been identified as diagnostically significant based on multi-dimensional analysis:
+${key_nodes_info}
+
 [REQUIREMENTS]
 1. The AI has collected all necessary information
 2. The AI should now accomplish the conversation target using the collected data
 3. The AI should provide a comprehensive response that addresses the original purpose
-4. Use ${language} for the response
+4. Explicitly reference the Key Diagnostic Findings in your reasoning
+5. Use ${language} for the response
 
 INPUTS:
 Conversation purpose: ${purpose}
 All collected information: ${collected}
+Key diagnostic findings: ${key_nodes_info}
 
 """
 
 HYPERTENSION_CONSULTATION_TARGET = """
-You are a hypertension specialist responsible for conducting patient assessments and providing medical recommendations. Your clinical output must include:
-- A formal medical diagnosis including hypertension classification and risk stratification
-- Lifestyle recommendations
-- Drug suggestions
-- Follow-up protocols.
+You are a hypertension specialist responsible for conducting patient assessments and providing medical recommendations.
 
-Final output requirements:
+【关键诊断发现 Key Diagnostic Findings】
+The following findings have been identified as diagnostically significant based on multi-dimensional analysis:
+${key_nodes_info}
+
+【Diagnostic Reasoning Requirements】
+When formulating your diagnosis, you MUST:
+1. Explicitly reference the Key Diagnostic Findings above
+2. Explain how each key finding supports or rules out specific diagnoses
+3. Demonstrate logical coherence by connecting key findings to your diagnostic conclusion
+4. Use the key findings as the foundation for your diagnostic reasoning
+
+Your clinical output must include:
 1. [Patient information summary] First, provide a comprehensive summary of all clinical indicators provided by the patient during the conversation
 2. [Diagnosis] Use medical terminology to provide a formal medical diagnosis including hypertension classification and risk stratification
+   - Your diagnostic reasoning MUST explicitly reference the Key Diagnostic Findings
+   - Explain the logical connection between key findings and your diagnosis
 3. [Recommendations] Based on patient information and diagnosis, provide lifestyle recommendations, drug suggestions, and follow-up protocols
 
 Note:
@@ -672,6 +742,8 @@ class GraphPrompts(BasePrompt):
             "CONTINUE_INIT_ENTITY_GRAPH_EDGES": CONTINUE_INIT_ENTITY_GRAPH_EDGES_PROMPT,
             "INIT_RELATION_GRAPH_EDGES": INIT_RELATION_GRAPH_EDGES_PROMPT,
             "CONTINUE_INIT_RELATION_GRAPH_EDGES": CONTINUE_INIT_RELATION_GRAPH_EDGES_PROMPT,
+            "INCREMENTAL_RELATION_GRAPH_EDGES": INCREMENTAL_RELATION_GRAPH_EDGES_PROMPT,
+            "CONTINUE_INCREMENTAL_RELATION_GRAPH_EDGES": CONTINUE_INCREMENTAL_RELATION_GRAPH_EDGES_PROMPT,
             "EXTRACT_INFO": EXTRACT_INFO_PROMPT,
             "CONTINUE_EXTRACT_INFO": CONTINUE_EXTRACT_INFO_PROMPT,
             "UPDATE_GRAPH": UPDATE_GRAPH_PROMPT,

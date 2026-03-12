@@ -57,6 +57,7 @@ class EntityGraph:
         self.step = 0
         self.accomplish = False
         self.prev_node = None
+        self.key_nodes = []  # Key nodes identified for diagnosis
         self.logger = get_logger(self.__class__.__name__)
 
         # 时间衰减计算器
@@ -642,17 +643,41 @@ class EntityGraph:
         selection = self._select_node()
         selection_info = selection[2] if selection else []
         log_messages.extend(selection_info)
-        
+
         if selection is None or selection[0] is None:
             # All information collected, generate final hint
             self.logger.info("All nodes processed, generating accomplishment hint")
             # log_messages.append("All nodes processed, generating accomplishment hint")
 
+            # Identify key nodes before generating accomplishment hint
+            self.logger.info("Identifying key diagnostic nodes...")
+            try:
+                from drhyper.core.key_node import KeyNodeIdentifier
+                key_node_identifier = KeyNodeIdentifier(
+                    self.entity_graph,
+                    self.relation_graph,
+                    self.config
+                )
+                self.key_nodes = key_node_identifier.identify(
+                    percentile_threshold=0.80,
+                    min_combined_score=0.60
+                )
+                self.logger.info(f"Identified {len(self.key_nodes)} key diagnostic nodes")
+                
+                # Format key nodes for prompt injection
+                key_nodes_info = self._format_key_nodes_for_prompt(self.key_nodes)
+                self.logger.info(f"Formatted {len(self.key_nodes)} key nodes for prompt")
+            except Exception as e:
+                self.logger.error(f"Key node identification failed: {e}")
+                self.key_nodes = []
+                key_nodes_info = "No key diagnostic findings identified."
+
             prompt = self.prompts.get(
                 "HINT_MESSAGE_ACCOMPLISH",
                 collected=self._serialize_nodes_with_value(self.entity_graph),
                 purpose=self.target,
-                language=self.language
+                language=self.language,
+                key_nodes_info=key_nodes_info
             )
             response = self.graph_model.invoke([SystemMessage(content=prompt)])
             hint_message = response.content
@@ -1128,12 +1153,30 @@ class EntityGraph:
     def _update_graph(self, updated_nodes: List[str], new_nodes: List[str]):
         """Update graph structure and weights based on new information"""
         log_messages = []
-        
-        if not updated_nodes:
-            self.logger.info("No nodes updated, skipping graph update")
-            # log_messages.append("No nodes updated, skipping graph update")
-            return log_messages
-            
+
+        # 1. Update weights and uncertainties of existing nodes (Entity Graph only)
+        if updated_nodes:
+            weight_update_messages = self._update_existing_node_weights(updated_nodes)
+            log_messages.extend(weight_update_messages)
+
+        # 2. Create new edges in Relation Graph for new nodes
+        if new_nodes:
+            self.logger.info(f"Creating relation edges for {len(new_nodes)} new nodes")
+            relation_edge_messages = self._create_incremental_relation_edges(new_nodes, updated_nodes)
+            log_messages.extend(relation_edge_messages)
+
+        # 3. Re-cluster if new nodes were added
+        if new_nodes:
+            self.logger.info("Re-clustering graph due to new nodes")
+            clustering_messages = self._clustering()
+            log_messages.extend(clustering_messages)
+
+        return log_messages
+
+    def _update_existing_node_weights(self, updated_nodes: List[str]) -> List[str]:
+        """Update weights and uncertainties of existing nodes based on new information"""
+        log_messages = []
+
         # Get neighbors of updated nodes
         all_neighbors = []
         for node_id in updated_nodes:
@@ -1152,7 +1195,7 @@ class EntityGraph:
             chunk = all_neighbors[i:i + chunk_size]
             
             relevant_nodes = "\n".join([
-                f"node {self.entity_graph.nodes[n]['id']}, {self.entity_graph.nodes[n]['name']}, "
+                f"node {n}, {self.entity_graph.nodes[n]['name']}, "
                 f"initial weight {self.entity_graph.nodes[n]['weight']}, "
                 f"initial uncertainty {self.entity_graph.nodes[n]['uncertainty']}"
                 for n in chunk
@@ -1174,12 +1217,9 @@ class EntityGraph:
                 for update in updates:
                     node_id = update.get("id")
                     if node_id in self.entity_graph.nodes:
-                        old_weight = self.entity_graph.nodes[node_id]["weight"]
-                        old_uncertainty = self.entity_graph.nodes[node_id]["uncertainty"]
-                        
-                        self.entity_graph.nodes[node_id]["weight"] = update.get("weight", old_weight)
-                        self.entity_graph.nodes[node_id]["uncertainty"] = update.get("uncertainty", old_uncertainty)
-                        
+                        self.entity_graph.nodes[node_id]["weight"] = update.get("weight", self.entity_graph.nodes[node_id]["weight"])
+                        self.entity_graph.nodes[node_id]["uncertainty"] = update.get("uncertainty", self.entity_graph.nodes[node_id]["uncertainty"])
+
                         update_count += 1
                         self.logger.info(f"Updated node {node_id}: {update.get('update_reason', 'No reason')}")
                         # log_messages.append(f"Updated node {node_id}: {update.get('update_reason', 'No reason')}")
@@ -1190,15 +1230,7 @@ class EntityGraph:
             except json.JSONDecodeError as e:
                 error_msg = f"Failed to parse update response: {e}"
                 self.logger.error(error_msg)
-                # log_messages.append(error_msg)
 
-        # Re-cluster if new nodes added
-        if new_nodes:
-            self.logger.info("Re-clustering graph due to new nodes")
-            # log_messages.append("Re-clustering graph due to new nodes")
-            clustering_messages = self._clustering()
-            log_messages.extend(clustering_messages)
-            
         return log_messages
     
     def _serialize_nodes(self, graph: nx.DiGraph) -> str:
@@ -1237,6 +1269,46 @@ class EntityGraph:
         info += f"- Status: {node.get('status', 0)} (0 for unknown, 1 for low confidence, 2 for high confidence)\n"
         return info
 
+    def _format_key_nodes_for_prompt(self, key_nodes: List[Dict]) -> str:
+        """
+        Format key nodes for injection into diagnosis prompt.
+
+        Args:
+            key_nodes: List of key node dictionaries from KeyNodeIdentifier
+
+        Returns:
+            Formatted string for prompt injection
+        """
+        if not key_nodes:
+            return "No key diagnostic findings identified."
+
+        lines = []
+        lines.append("【Key Diagnostic Findings】")
+        lines.append("")
+
+        for i, node in enumerate(key_nodes, 1):
+            name = node.get("name", "Unknown")
+            value = node.get("value", "")
+            combined_score = node.get("combined_score", 0)
+            percentile = node.get("percentile_rank", 0)
+            dims = node.get("dimension_scores", {})
+
+            # Format: [1] Entity Name: Value (Combined Score: XX, Percentile: YY%)
+            value_str = f": {value}" if value else ""
+            lines.append(f"[{i}] {name}{value_str}")
+            lines.append(f"    Combined Score: {combined_score:.2f}, Percentile: {percentile*100:.1f}%")
+
+            # Add dimension breakdown
+            lines.append(f"    Dimension Scores:")
+            lines.append(f"      - Centrality: {dims.get('centrality', 0):.2f}")
+            lines.append(f"      - Confidence: {dims.get('confidence', 0):.2f}")
+            lines.append(f"      - Temporal Correlation: {dims.get('temporal_correlation', 0):.2f}")
+            lines.append(f"      - Clinical Significance: {dims.get('clinical_significance', 0):.2f}")
+            lines.append(f"      - Community Role: {dims.get('community_role', 0):.2f}")
+            lines.append("")
+
+        return "\n".join(lines)
+
     def _format_patient_text_records(self, patient_text_records: Dict[str, str]) -> str:
         """格式化患者文本记录为LLM提示词上下文
 
@@ -1255,4 +1327,274 @@ class EntityGraph:
                 lines.append(f"\n{field_name}:\n{text_value}")
 
         return "\n".join(lines)
+
+    def _select_candidate_nodes_for_relation_edges(
+        self,
+        new_nodes: List[str],
+        updated_nodes: List[str]
+    ) -> List[str]:
+        """
+        Select candidate nodes for creating relation edges with new nodes.
+        
+        Returns candidates including:
+        1. updated_nodes
+        2. 1-hop neighbors of updated_nodes in relation graph
+        3. Existing nodes with semantic overlap (keyword matching)
+        4. new_nodes themselves (for inter-new-node edges)
+        
+        Note: New nodes don't have community info yet, so community-based filtering is not used.
+        
+        Args:
+            new_nodes: List of newly added node IDs
+            updated_nodes: List of updated node IDs
+            
+        Returns:
+            List of candidate node IDs (limited to 50)
+        """
+        candidates = set()
+        
+        # Strategy 1: Updated nodes as candidates (highest priority)
+        candidates.update(updated_nodes)
+        
+        # Strategy 2: 1-hop neighbors of updated nodes in relation graph
+        for node_id in updated_nodes:
+            if node_id in self.relation_graph:
+                neighbors = set(self.relation_graph.neighbors(node_id))
+                predecessors = set(self.relation_graph.predecessors(node_id))
+                successors = set(self.relation_graph.successors(node_id))
+                candidates.update(neighbors | predecessors | successors)
+        
+        # Strategy 3: Existing nodes with semantic overlap (keyword matching)
+        new_node_keywords = self._extract_keywords_from_nodes(new_nodes)
+        for node_id, data in self.entity_graph.nodes(data=True):
+            if node_id in new_nodes:  # Exclude new nodes themselves (will add separately)
+                continue
+            node_keywords = self._extract_keywords(data.get("name", ""), data.get("description", ""))
+            if new_node_keywords & node_keywords:  # Has intersection
+                candidates.add(node_id)
+        
+        # Strategy 4: Add new nodes themselves (for inter-new-node edges)
+        candidates.update(new_nodes)
+        
+        # Limit candidates to 50 to avoid token limits
+        if len(candidates) > 50:
+            prioritized = []
+            # Priority 1: updated_nodes
+            prioritized.extend(updated_nodes)
+            # Priority 2: 1-hop neighbors
+            for node_id in updated_nodes:
+                if node_id in self.relation_graph:
+                    prioritized.extend(self.relation_graph.neighbors(node_id))
+            # Priority 3: new nodes themselves
+            prioritized.extend(new_nodes)
+            # Priority 4: other candidates (keyword match)
+            others = candidates - set(prioritized)
+            prioritized.extend(others)
+            
+            # Deduplicate and truncate
+            seen = set()
+            unique_prioritized = []
+            for node_id in prioritized:
+                if node_id not in seen:
+                    seen.add(node_id)
+                    unique_prioritized.append(node_id)
+            candidates = set(unique_prioritized[:50])
+        
+        return list(candidates)
+
+    def _extract_keywords_from_nodes(self, node_ids: List[str]) -> set:
+        """Extract keywords from a list of nodes"""
+        keywords = set()
+        for node_id in node_ids:
+            if node_id in self.entity_graph:
+                data = self.entity_graph.nodes[node_id]
+                keywords.update(self._extract_keywords(data.get("name", ""), data.get("description", "")))
+        return keywords
+
+    def _extract_keywords(self, name: str, description: str) -> set:
+        """
+        Extract keywords from name and description.
+        Uses NLTK stopwords for filtering common English words.
+        """
+        import re
+        from nltk.corpus import stopwords
+        stop_words = set(stopwords.words('english'))
+        
+        text = f"{name} {description}".lower()
+        # Simple tokenization: split by spaces and punctuation
+        words = re.findall(r'\b[a-z]+\b', text)
+        # Filter stopwords and short words
+        return set(w for w in words if w not in stop_words and len(w) > 2)
+
+    def _filter_and_deduplicate_edges(self, edges: List[Dict]) -> List[Dict]:
+        """
+        Filter and deduplicate edge list.
+        
+        Rules:
+        1. Remove self-loop edges (source == target)
+        2. Remove duplicate (source, target) pairs (keep first)
+        3. Filter out edges with missing nodes
+        
+        Args:
+            edges: List of edge dictionaries
+            
+        Returns:
+            Filtered and deduplicated edge list
+        """
+        seen = set()
+        deduplicated = []
+        skipped_self_loop = 0
+        skipped_duplicate = 0
+        skipped_missing_node = 0
+        
+        for edge in edges:
+            source = edge.get("source")
+            target = edge.get("target")
+            
+            # Check self-loop
+            if source == target:
+                skipped_self_loop += 1
+                continue
+            
+            # Check if nodes exist
+            if source not in self.entity_graph or target not in self.entity_graph:
+                skipped_missing_node += 1
+                continue
+            
+            # Check duplicate
+            edge_key = (source, target)
+            if edge_key in seen:
+                skipped_duplicate += 1
+                continue
+            
+            seen.add(edge_key)
+            deduplicated.append(edge)
+        
+        self.logger.info(
+            f"Edge filtering: {skipped_self_loop} self-loops, "
+            f"{skipped_duplicate} duplicates, {skipped_missing_node} missing nodes"
+        )
+        
+        return deduplicated
+
+    def _create_incremental_relation_edges(self, new_nodes: List[str], updated_nodes: List[str]) -> List[str]:
+        """
+        Create medical relationship edges for new nodes in the relation graph.
+        
+        Args:
+            new_nodes: List of newly added node IDs
+            updated_nodes: List of updated node IDs
+            
+        Returns:
+            List of log messages
+        """
+        log_messages = []
+        
+        # Step 1: Get all candidate nodes for edge creation
+        candidate_ids = self._select_candidate_nodes_for_relation_edges(new_nodes, updated_nodes)
+        
+        all_entities = []
+        for node_id in candidate_ids:
+            node_data = self.entity_graph.nodes[node_id]
+            all_entities.append({
+                "id": node_id,
+                "name": node_data["name"],
+                "description": node_data["description"],
+                "value": node_data.get("value", ""),
+                "is_new": node_id in new_nodes  # Mark as new for LLM
+            })
+        
+        if not all_entities:
+            return log_messages
+        
+        self.logger.info(f"Selected {len(all_entities)} candidate nodes for relation edges")
+        
+        # Step 2: Use LLM to create all edges in one call
+        edges = self._create_incremental_edges_with_llm(all_entities)
+        
+        # Step 3: Filter and deduplicate edges
+        valid_edges = self._filter_and_deduplicate_edges(edges)
+        
+        # Step 4: Add edges to relation graph
+        edge_count = 0
+        for edge in valid_edges:
+            source = edge.get("source")
+            target = edge.get("target")
+            
+            # Double-check node existence
+            if source not in self.relation_graph or target not in self.relation_graph:
+                self.logger.warning(f"Skipping edge with missing node: {source} -> {target}")
+                continue
+            
+            # Check if edge already exists in graph
+            if self.relation_graph.has_edge(source, target):
+                self.logger.debug(f"Edge already exists, skipping: {source} -> {target}")
+                continue
+            
+            self.relation_graph.add_edge(source, target, **edge)
+            edge_count += 1
+            self.logger.info(f"Added relation edge: {source} -> {target}")
+        
+        self.logger.info(f"Total {edge_count} relation edges added (after deduplication)")
+        return log_messages
+
+    def _create_incremental_edges_with_llm(self, all_entities: List[Dict]) -> List[Dict]:
+        """
+        Use LLM to create incremental relation edges.
+        
+        Args:
+            all_entities: List of all candidate entities with their attributes
+            
+        Returns:
+            List of edge dictionaries from LLM
+        """
+        # Format all entities
+        entities_str = ", ".join([
+            f"id: {e['id']}, name: {e['name']}, value: {e.get('value', 'N/A')}, new: {e['is_new']}" 
+            for e in all_entities
+        ])
+        
+        # Get graph summary
+        existing_graph_summary = self._summarize_existing_graph_structure()
+        
+        # Get prompt
+        prompt = self.prompts.get(
+            "INCREMENTAL_RELATION_GRAPH_EDGES",
+            purpose=self.target,
+            all_entities=entities_str,
+            existing_graph_summary=existing_graph_summary,
+            language=self.language
+        )
+        
+        messages = [HumanMessage(content=prompt)]
+        response = self.graph_model.invoke(messages, response_format=ENTITY_EDGES_SCHEMA)
+        
+        try:
+            result = parse_json_response(response.content)
+            edges = result.get("edges", [])
+            self.logger.info(f"LLM returned {len(edges)} incremental relation edges")
+            return edges
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse incremental edges: {e}")
+            return []
+
+    def _summarize_existing_graph_structure(self) -> str:
+        """
+        Generate a summary of existing graph structure.
+        
+        Returns:
+            String summary of graph statistics and important nodes
+        """
+        total_nodes = self.entity_graph.number_of_nodes()
+        total_edges = self.entity_graph.number_of_edges()
+        
+        # Get high-weight nodes
+        important_nodes = []
+        for node_id, data in self.entity_graph.nodes(data=True):
+            if data.get("weight", 0) >= 0.8:
+                important_nodes.append(f"{node_id}: {data['name']} (weight={data['weight']})")
+        
+        summary = f"Total nodes: {total_nodes}, Total edges: {total_edges}\n"
+        summary += f"Important nodes: {', '.join(important_nodes[:20])}"
+        return summary
 

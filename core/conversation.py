@@ -201,11 +201,12 @@ class LongConversation(BaseConversation):
             "graph_state": {
                 "step": self.plan_graph.step,
                 "accomplish": self.plan_graph.accomplish,
-                "prev_node": self.plan_graph.prev_node
+                "prev_node": self.plan_graph.prev_node,
+                "key_nodes": self.plan_graph.key_nodes  # Persist key nodes
             },
             "metadata": {
                 "cached_at": datetime.now().isoformat(),
-                "version": "2.2",  # Updated version with datetime serialization
+                "version": "2.3",  # Updated version with key_nodes persistence
                 "message_count": len(self.messages),
                 "entity_graph_nodes": len(entity_graph_data['nodes']),
                 "entity_graph_edges": len(entity_graph_data['links']),
@@ -332,9 +333,12 @@ class LongConversation(BaseConversation):
             instance.plan_graph.step = graph_state.get("step", 0)
             instance.plan_graph.accomplish = graph_state.get("accomplish", False)
             instance.plan_graph.prev_node = graph_state.get("prev_node")
+            instance.plan_graph.key_nodes = graph_state.get("key_nodes", [])  # Restore key nodes
 
             instance.logger.info(f"Graphs restored: {instance.plan_graph.entity_graph.number_of_nodes()} nodes, "
                                f"{instance.plan_graph.entity_graph.number_of_edges()} edges")
+            if instance.plan_graph.key_nodes:
+                instance.logger.info(f"Restored {len(instance.plan_graph.key_nodes)} key nodes from cache")
         else:
             instance.logger.warning("No graph data in cache (v2.0 format), using empty graphs")
             instance.logger.info("Graph state will be empty until first message")
@@ -447,7 +451,10 @@ class LongConversation(BaseConversation):
         # log_messages.append("Getting new hint message...")
         hint_message, plan_status, hint_log_messages = self.plan_graph.get_hint_message()
         log_messages.extend(hint_log_messages)
-        
+
+        # Key nodes are now injected in EntityGraph.get_hint_message() when accomplish=True
+        # No need for additional injection here
+
         self.current_hint = hint_message
         
         # Prepare messages for this turn

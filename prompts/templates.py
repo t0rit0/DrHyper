@@ -303,25 +303,21 @@ Your goal: Extract and present ALL factual information visible in the image with
 """
 
 ENTITY_RETRIEVE_PROMPT = """
-Given a specific purpose, identify the **MOST ESSENTIAL** information entities required to achieve it.
-
-**CRITICAL CONSTRAINT: Maximum 5-10 entities total. Focus on quality over quantity.**
+Given a specific purpose, analyze it thoroughly and identify all information entities required to achieve it. When all necessary entities are provided, you should be able to completely answer or fulfill the stated purpose.
 
 GUIDELINES:
 - Entities must be specific and detailed (e.g., "patient age" instead of "medical condition")
-- Only include entities that are DIRECTLY NECESSARY for the purpose
+- Provide as many relevant entities as possible
 - Entities should have finite, calculable answer pools to enable uncertainty measurement
 - Split broad concepts into specific components (e.g., "drinking habits" → "alcohol consumption" and "drinking frequency")
 - Prioritize entities by importance, listing the most critical information first
-- **Do NOT include marginally relevant entities** - be selective and focused
-- When in doubt about an entity's necessity, EXCLUDE it
 
 FORMAT:
 Return ONLY a JSON object that can be parsed by Python's json.loads() function. Do not include markdown headers, code blocks, or any explanatory text.
 
 The JSON must contain:
 - "endpoint": boolean ("true" if all required entities are listed, "false" if token limit reached)
-- "entities": array of entity names as strings (maximum 10 items)
+- "entities": array of entity names as strings
 
 Target purpose: ${purpose}
 Language: ${language}

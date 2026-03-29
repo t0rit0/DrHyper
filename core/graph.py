@@ -4,6 +4,7 @@ import uuid
 import math
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import networkx as nx
 import pickle
 
@@ -173,14 +174,15 @@ class EntityGraph:
         nodes, node_messages = self._initialize_entity_attributes(entities, patient_text_records)
         log_messages.extend(node_messages)
         
-        # Step 3: Create entity graph edges
-        # self.logger.info("Creating entity graph edges...")
-        entity_edges, entity_edge_messages = self._create_entity_edges(entities)
+        # Step 3 & 4: Create entity and relation graph edges in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            entity_future = executor.submit(self._create_entity_edges, entities)
+            relation_future = executor.submit(self._create_relation_edges, entities)
+
+            entity_edges, entity_edge_messages = entity_future.result()
+            relation_edges, relation_edge_messages = relation_future.result()
+
         log_messages.extend(entity_edge_messages)
-        
-        # Step 4: Create relation graph edges
-        # self.logger.info("Creating relation graph edges...")
-        relation_edges, relation_edge_messages = self._create_relation_edges(entities)
         log_messages.extend(relation_edge_messages)
         
         # Build graphs
@@ -353,6 +355,32 @@ class EntityGraph:
         
         return entities_with_ids, log_messages
     
+    def _initialize_chunk_attributes(
+        self, chunk: List[Dict[str, str]], chunk_index: int, total_chunks: int,
+        patient_context_str: str
+    ) -> List[Dict[str, Any]]:
+        """Initialize attributes for a single chunk of entities.
+
+        Args:
+            chunk: List of entities in this chunk
+            chunk_index: 0-based chunk index
+            total_chunks: Total number of chunks
+            patient_context_str: Formatted patient context string
+
+        Returns:
+            List of entity nodes with initialized attributes
+        """
+        entities_str = ", ".join([f"id: {e['id']}, name: {e['name']}" for e in chunk])
+        prompt = self.prompts.get("INIT_GRAPH_ENTITY", purpose=self.target, entities=entities_str, language=self.language)
+        if patient_context_str:
+            prompt = f"{patient_context_str}\n\n{prompt}"
+
+        response = self.graph_model.invoke([HumanMessage(content=prompt)], response_format=ENTITY_NODES_SCHEMA)
+        result = parse_json_response(response.content)
+        chunk_nodes = result.get("entities", [])
+        self.logger.info(f"Initialized attributes for chunk {chunk_index + 1}/{total_chunks}")
+        return chunk_nodes
+
     def _initialize_entity_attributes(
         self, entities: List[Dict[str, str]], patient_text_records: Optional[Dict[str, str]] = None
     ) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -362,7 +390,6 @@ class EntityGraph:
             entities: List of entities to initialize
             patient_text_records: Optional patient text records for context
         """
-        nodes = []
         log_messages = []
         chunk_size = 10
 
@@ -371,30 +398,31 @@ class EntityGraph:
         if patient_text_records:
             patient_context_str = self._format_patient_text_records(patient_text_records)
 
+        # Build chunks
+        chunks = []
         for i in range(0, len(entities), chunk_size):
-            chunk = entities[i:i + chunk_size]
-            entities_str = ", ".join([f"id: {e['id']}, name: {e['name']}" for e in chunk])
+            chunks.append(entities[i:i + chunk_size])
 
-            # 获取提示词，如果存在患者上下文则添加到提示词中
-            prompt = self.prompts.get("INIT_GRAPH_ENTITY", purpose=self.target, entities=entities_str, language=self.language)
+        total_chunks = len(chunks)
 
-            # 如果有患者上下文，添加到提示词中
-            if patient_context_str:
-                prompt = f"{patient_context_str}\n\n{prompt}"
+        # Parallelize chunk processing
+        chunk_results: Dict[int, List[Dict[str, Any]]] = {}
+        with ThreadPoolExecutor(max_workers=min(total_chunks, 4)) as executor:
+            futures = {
+                executor.submit(
+                    self._initialize_chunk_attributes,
+                    chunk, idx, total_chunks, patient_context_str
+                ): idx
+                for idx, chunk in enumerate(chunks)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                chunk_results[idx] = future.result()
 
-            response = self.graph_model.invoke([HumanMessage(content=prompt)], response_format=ENTITY_NODES_SCHEMA)
-
-            try:
-                result = parse_json_response(response.content)
-                chunk_nodes = result.get("entities", [])  # 获取实体数组
-                nodes.extend(chunk_nodes)
-                self.logger.info(f"Initialized attributes for chunk {i//chunk_size + 1}/{math.ceil(len(entities)/chunk_size)}")
-                # log_messages.append(f"Initialized attributes for chunk {i//chunk_size + 1}/{math.ceil(len(entities)/chunk_size)}")
-            except json.JSONDecodeError as e:
-                error_msg = f"Failed to parse entity attributes: {e}"
-                self.logger.error(error_msg)
-                # log_messages.append(error_msg)
-                raise
+        # Merge results in original order
+        nodes = []
+        for idx in sorted(chunk_results.keys()):
+            nodes.extend(chunk_results[idx])
 
         # 为每个节点添加时间属性
         now = datetime.now()
@@ -407,7 +435,6 @@ class EntityGraph:
             node["freshness"] = 1.0
 
         self.logger.info(f"Total number of nodes: {len(nodes)}")
-        # log_messages.append(f"Total number of nodes: {len(nodes)}")
         return nodes, log_messages
 
     def _total_node_number(self) -> int:

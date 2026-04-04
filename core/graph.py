@@ -81,12 +81,20 @@ class EntityGraph:
         log_messages = ["Working directory already exists"]
         return log_messages
     
-    def init(self, save: bool = False, patient_context: Optional[Dict[str, Any]] = None):
+    def init(
+        self,
+        save: bool = False,
+        patient_context: Optional[Dict[str, Any]] = None,
+        patient_id: Optional[str] = None,
+        db_session=None,
+    ):
         """Initialize the graph
 
         Args:
             save: Whether to save graphs to disk
             patient_context: Optional patient context with patient text records
+            patient_id: Optional patient ID for metric preset injection
+            db_session: Optional DB session for metric preset injection
         """
         log_messages = []
 
@@ -98,7 +106,11 @@ class EntityGraph:
         if patient_context and patient_context.get("patient_text_records"):
             patient_text_records = patient_context["patient_text_records"]
 
-        init_messages = self._initialize_graph(patient_text_records=patient_text_records)
+        init_messages = self._initialize_graph(
+            patient_text_records=patient_text_records,
+            patient_id=patient_id,
+            db_session=db_session,
+        )
         log_messages.extend(init_messages)
 
         clustering_messages = self._clustering()
@@ -156,11 +168,20 @@ class EntityGraph:
         # log_messages.append("Loaded graphs successfully")
         return log_messages
     
-    def _initialize_graph(self, patient_text_records: Optional[Dict[str, str]] = None):
+    def _initialize_graph(
+        self,
+        patient_text_records: Optional[Dict[str, str]] = None,
+        patient_id: Optional[str] = None,
+        db_session=None,
+    ):
         """Initialize entity and relation graphs using LLM
 
         Args:
             patient_text_records: Optional patient text records for context during entity initialization
+            patient_id: Optional patient ID for metric preset injection
+            db_session: Optional DB session for metric preset injection.
+                        When both patient_id and db_session are provided,
+                        metric preset nodes are injected.
         """
         log_messages = []
 
@@ -173,48 +194,76 @@ class EntityGraph:
         # self.logger.info("Initializing entity attributes...")
         nodes, node_messages = self._initialize_entity_attributes(entities, patient_text_records)
         log_messages.extend(node_messages)
-        
-        # Step 3 & 4: Create entity and relation graph edges in parallel
+
+        # Step 3: Inject metric presets (no LLM, direct DB queries)
+        preset_nodes = []
+        if patient_id and db_session:
+            try:
+                from backend.services.metric_presets import inject_metric_presets
+                preset_nodes = inject_metric_presets(
+                    nodes=nodes,
+                    patient_id=patient_id,
+                    db=db_session,
+                    temporal_calculator=self.temporal_calculator,
+                    graph_model=self.graph_model,
+                )
+                self.logger.info(f"Injected {len(preset_nodes)} metric preset nodes")
+            except Exception as e:
+                self.logger.warning(f"Metric preset injection failed (non-fatal): {e}")
+
+        # Step 4 & 5: Create edges in parallel
+        # Entity edges: only original entities (presets are data, not diagnostic dependencies)
+        # Relation edges: original entities + presets (presets should be semantically linked)
         with ThreadPoolExecutor(max_workers=2) as executor:
             entity_future = executor.submit(self._create_entity_edges, entities)
-            relation_future = executor.submit(self._create_relation_edges, entities)
+
+            relation_entities = list(entities)
+            if preset_nodes:
+                relation_entities.extend(
+                    [{"id": p["id"], "name": p["name"]} for p in preset_nodes]
+                )
+            relation_future = executor.submit(self._create_relation_edges, relation_entities)
 
             entity_edges, entity_edge_messages = entity_future.result()
             relation_edges, relation_edge_messages = relation_future.result()
 
         log_messages.extend(entity_edge_messages)
         log_messages.extend(relation_edge_messages)
-        
-        # Build graphs
-        # self.logger.info("Building graphs...")
-        # 检查是否有预填充的节点需要保留
+
+        # Build graphs (original nodes + preset nodes)
+        all_nodes = nodes + preset_nodes
         has_prefilled_nodes = self.entity_graph.number_of_nodes() > 0
-        has_new_nodes = len(nodes) > 0
+        has_new_nodes = len(all_nodes) > 0
 
         if has_prefilled_nodes and not has_new_nodes:
-            # 有预填充节点但无新节点：保留现有图
             self.logger.info("Preserving prefilled nodes, no new entities to add")
             entity_graph_messages = []
             relation_graph_messages = []
         elif has_prefilled_nodes and has_new_nodes:
-            # 有预填充节点且有新节点：添加到现有图
-            entity_graph_messages = self._add_nodes_to_existing_graph(self.entity_graph, nodes, entity_edges)
+            entity_graph_messages = self._add_nodes_to_existing_graph(self.entity_graph, all_nodes, entity_edges)
             log_messages.extend(entity_graph_messages)
 
-            relation_graph_messages = self._add_nodes_to_existing_graph(self.relation_graph, nodes, relation_edges)
+            relation_graph_messages = self._add_nodes_to_existing_graph(self.relation_graph, all_nodes, relation_edges)
             log_messages.extend(relation_graph_messages)
         else:
-            # 无预填充节点：创建新图
-            self.entity_graph, entity_graph_messages = self._build_graph(nodes, entity_edges)
+            self.entity_graph, entity_graph_messages = self._build_graph(all_nodes, entity_edges)
             log_messages.extend(entity_graph_messages)
 
-            self.relation_graph, relation_graph_messages = self._build_graph(nodes, relation_edges)
+            self.relation_graph, relation_graph_messages = self._build_graph(all_nodes, relation_edges)
             log_messages.extend(relation_graph_messages)
-        
+
         # Initialize node states
         node_states_messages = self._initialize_node_states()
         log_messages.extend(node_states_messages)
-        
+
+        # Cleanup unlinked preset nodes and update neighbor weights
+        if preset_nodes:
+            cleanup_messages = self._cleanup_unlinked_presets(preset_nodes)
+            log_messages.extend(cleanup_messages)
+
+            weight_messages = self._update_weights_from_presets(preset_nodes)
+            log_messages.extend(weight_messages)
+
         return log_messages
 
     # def _prefill_known_entities(self, known_entities: List[Any]) -> List[str]:
@@ -600,7 +649,64 @@ class EntityGraph:
         self.logger.info(f"Initialized states for {initialized_count} nodes")
         # log_messages.append(f"Initialized states for {initialized_count} nodes")
         return log_messages
-    
+
+    def _cleanup_unlinked_presets(self, preset_nodes: List[Dict[str, Any]]) -> List[str]:
+        """
+        Remove preset nodes that have no edges in the relation graph.
+
+        Presets with no relation edges are orphaned data nodes that
+        provide no diagnostic value. Removing them keeps the graph clean.
+        """
+        log_messages = []
+        removed_count = 0
+
+        for preset_node in preset_nodes:
+            node_id = preset_node["id"]
+
+            has_edges = (
+                self.relation_graph.has_predecessor(node_id)
+                or self.relation_graph.has_successor(node_id)
+            )
+
+            if not has_edges:
+                if self.entity_graph.has_node(node_id):
+                    self.entity_graph.remove_node(node_id)
+                if self.relation_graph.has_node(node_id):
+                    self.relation_graph.remove_node(node_id)
+                removed_count += 1
+
+        if removed_count > 0:
+            self.logger.info(f"Cleaned up {removed_count} unlinked preset nodes")
+
+        return log_messages
+
+    def _update_weights_from_presets(self, preset_nodes: List[Dict[str, Any]]) -> List[str]:
+        """
+        Update weights/uncertainty of neighbors of linked preset nodes.
+
+        Uses the existing LLM-based _update_existing_node_weights() for
+        accurate weight recalculation based on preset values.
+        """
+        log_messages = []
+        active_ids = []
+
+        for preset_node in preset_nodes:
+            node_id = preset_node["id"]
+            if self.relation_graph.has_node(node_id):
+                has_edges = (
+                    self.relation_graph.has_predecessor(node_id)
+                    or self.relation_graph.has_successor(node_id)
+                )
+                if has_edges and preset_node.get("status", 0) > 0:
+                    active_ids.append(node_id)
+
+        if active_ids:
+            self.logger.info(f"Updating neighbor weights for {len(active_ids)} linked preset nodes")
+            weight_messages = self._update_existing_node_weights(active_ids)
+            log_messages.extend(weight_messages)
+
+        return log_messages
+
     def _clustering(self):
         """Perform community detection on the graph"""
         log_messages = []
@@ -801,8 +907,14 @@ class EntityGraph:
         hit_filtered = 0
         weight_filtered = 0
         prereq_filtered = 0
-        
+        preset_filtered = 0
+
         for node_id, data in self.entity_graph.nodes(data=True):
+            # Exclude preset nodes from hint selection
+            if data.get("source") == "preset":
+                preset_filtered += 1
+                continue
+
             # Check status
             if data.get("status", 0) not in (0, 1):
                 status_filtered += 1
@@ -833,7 +945,8 @@ class EntityGraph:
 
         self.logger.info(f"Found {len(available)} available nodes")
         self.logger.debug(f"Filtered nodes: {status_filtered} by status, {hit_filtered} by hit threshold, " +
-                         f"{weight_filtered} by weight threshold, {prereq_filtered} by prerequisites")
+                         f"{weight_filtered} by weight threshold, {prereq_filtered} by prerequisites, " +
+                         f"{preset_filtered} preset nodes skipped")
         # log_messages.append(f"Found {len(available)} available nodes")
         # log_messages.append(f"Filtered nodes: {status_filtered} by status, {hit_filtered} by hit threshold, " +
         #                  f"{weight_filtered} by weight threshold, {prereq_filtered} by prerequisites")

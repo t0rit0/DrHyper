@@ -39,15 +39,15 @@ class TestKeyNodesEndToEnd:
         # Create entity graph with multiple nodes
         eg.entity_graph = nx.DiGraph()
         eg.entity_graph.add_node("v1", name="血压", value="145/92 mmHg", weight=0.9,
-                                  temporal_confidence=0.85, freshness=0.9,
+                                  confidential_level=0.85,
                                   last_updated_at=datetime.now(),
                                   community=0, status=2, hit=3)
         eg.entity_graph.add_node("v2", name="年龄", value="55 岁", weight=0.7,
-                                  temporal_confidence=0.9, freshness=0.95,
+                                  confidential_level=0.9,
                                   last_updated_at=datetime.now(),
                                   community=0, status=2, hit=2)
         eg.entity_graph.add_node("v3", name="症状", value="头痛，头晕", weight=0.8,
-                                  temporal_confidence=0.8, freshness=0.85,
+                                  confidential_level=0.8,
                                   last_updated_at=datetime.now(),
                                   community=1, status=2, hit=2)
 
@@ -102,11 +102,11 @@ class TestKeyNodesEndToEnd:
         # Create entity graph
         eg.entity_graph = nx.DiGraph()
         eg.entity_graph.add_node("v1", name="血压", value="145/92 mmHg", weight=0.9,
-                                  temporal_confidence=0.85, freshness=0.9,
+                                  confidential_level=0.85,
                                   last_updated_at=datetime.now(),
                                   community=0, status=2, hit=3)
         eg.entity_graph.add_node("v2", name="年龄", value="55 岁", weight=0.7,
-                                  temporal_confidence=0.9, freshness=0.95,
+                                  confidential_level=0.9,
                                   last_updated_at=datetime.now(),
                                   community=0, status=2, hit=2)
 
@@ -159,7 +159,7 @@ class TestKeyNodesEndToEnd:
         eg.entity_graph = nx.DiGraph()
         eg.relation_graph = nx.DiGraph()
 
-        # Create mock key nodes with all dimension scores
+        # Create mock key nodes with 4 dimension scores
         key_nodes = [
             {
                 "id": "v1",
@@ -170,7 +170,6 @@ class TestKeyNodesEndToEnd:
                 "dimension_scores": {
                     "centrality": 0.85,
                     "confidence": 0.85,
-                    "temporal_correlation": 0.90,
                     "clinical_significance": 0.95,
                     "community_role": 0.78
                 }
@@ -184,7 +183,6 @@ class TestKeyNodesEndToEnd:
                 "dimension_scores": {
                     "centrality": 0.70,
                     "confidence": 0.90,
-                    "temporal_correlation": 0.65,
                     "clinical_significance": 0.75,
                     "community_role": 0.60
                 }
@@ -202,7 +200,6 @@ class TestKeyNodesEndToEnd:
         assert "Dimension Scores:" in formatted
         assert "Centrality: 0.85" in formatted
         assert "Confidence: 0.85" in formatted
-        assert "Temporal Correlation: 0.90" in formatted
         assert "Clinical Significance: 0.95" in formatted
         assert "Community Role: 0.78" in formatted
 
@@ -237,7 +234,6 @@ class TestKeyNodesEndToEnd:
                 "dimension_scores": {
                     "centrality": 0.85,
                     "confidence": 0.85,
-                    "temporal_correlation": 0.90,
                     "clinical_significance": 0.95,
                     "community_role": 0.78
                 }
@@ -293,7 +289,6 @@ class TestKeyNodesEndToEnd:
                         "dimension_scores": {
                             "centrality": 0.85,
                             "confidence": 0.85,
-                            "temporal_correlation": 0.90,
                             "clinical_significance": 0.95,
                             "community_role": 0.78
                         }

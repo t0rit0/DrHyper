@@ -198,10 +198,8 @@ class EntityGraph:
             try:
                 from backend.services.metric_presets import inject_metric_presets
                 preset_nodes = inject_metric_presets(
-                    nodes=nodes,
                     patient_id=patient_id,
                     db=db_session,
-                    graph_model=self.graph_model,
                 )
                 self.logger.info(f"Injected {len(preset_nodes)} metric preset nodes")
             except Exception as e:

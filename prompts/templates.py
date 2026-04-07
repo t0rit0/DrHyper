@@ -563,6 +563,37 @@ New values provided: ${collected}
 Nodes requiring update: ${relevant_nodes}
 """
 
+PRESET_PROPAGATION_PROMPT = """
+You are a medical data integration specialist. Your task is to propagate structured metric data from preset measurement nodes to the relevant entity nodes in the knowledge graph.
+
+For each entity node listed below, examine the connected preset metric data and decide what value to write to the entity node.
+
+IMPORTANT NOTES:
+- One preset can serve multiple entity nodes; one entity can use multiple presets
+- If a preset's data cannot fully answer an entity (e.g., entity asks for 3-day history but preset only has latest value), set a lower confidential_level accordingly
+- Do NOT fabricate values that aren't supported by the preset data
+
+CONFIDENTIAL_LEVEL GUIDELINES:
+- 0.8-1.0: Preset data directly and completely answers this entity
+- 0.4-0.7: Preset data partially answers this entity
+- 0.0-0.3: Preset data is insufficient or tangential
+
+If preset data cannot answer an entity, return empty value with confidential_level=0.0.
+
+OUTPUT:
+Return a JSON array of updated entity nodes, each containing:
+- id: Entity node ID
+- value: The value to write (include units, e.g. "120 mmHg"; empty string if no applicable preset data)
+- confidential_level: Confidence score [0-1]
+- weight: Updated weight for this entity node
+- uncertainty: Updated uncertainty for this entity node
+- update_reason: Brief explanation
+
+Purpose: ${purpose}
+Entity nodes requiring update: ${entity_nodes}
+Connected preset metric data: ${preset_data}
+"""
+
 HINT_MESSAGE_RETRIEVE = """
 Generate guidance for the AI system to conduct the next step of information gathering in a target-driven conversation.
 
@@ -743,6 +774,7 @@ class GraphPrompts(BasePrompt):
             "EXTRACT_INFO": EXTRACT_INFO_PROMPT,
             "CONTINUE_EXTRACT_INFO": CONTINUE_EXTRACT_INFO_PROMPT,
             "UPDATE_GRAPH": UPDATE_GRAPH_PROMPT,
+            "PRESET_PROPAGATION": PRESET_PROPAGATION_PROMPT,
             "HINT_MESSAGE_RETRIEVE": HINT_MESSAGE_RETRIEVE,
             "HINT_MESSAGE_ACCOMPLISH": HINT_MESSAGE_ACCOMPLISH,
             "ROUTINE_ADDITION": "Follow this routine: ${routine}",

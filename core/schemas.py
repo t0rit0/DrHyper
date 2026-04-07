@@ -154,3 +154,27 @@ UPDATE_GRAPH_SCHEMA = {
         }
     }
 }
+
+# Schema 6: PRESET_PROPAGATION - returns [{id, value, confidential_level, weight, uncertainty, update_reason}]
+PRESET_PROPAGATION_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "preset_propagation",
+        "strict": True,
+        "schema": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "value": {"type": "string"},
+                    "confidential_level": {"type": "number"},
+                    "weight": {"type": "number"},
+                    "uncertainty": {"type": "number"},
+                    "update_reason": {"type": "string"}
+                },
+                "required": ["id", "value", "confidential_level", "weight", "uncertainty", "update_reason"]
+            }
+        }
+    }
+}

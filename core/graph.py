@@ -1,3 +1,4 @@
+import contextlib
 import json
 import math
 import os
@@ -17,6 +18,7 @@ from drhyper.core.schemas import (
     ENTITY_NODES_SCHEMA,
     ENTITY_RETRIEVE_SCHEMA,
     EXTRACT_INFO_SCHEMA,
+    PRESET_PROPAGATION_SCHEMA,
     UPDATE_GRAPH_SCHEMA,
 )
 from drhyper.prompts.templates import GraphPrompts
@@ -250,90 +252,19 @@ class EntityGraph:
         node_states_messages = self._initialize_node_states()
         log_messages.extend(node_states_messages)
 
-        # Cleanup unlinked preset nodes and update neighbor weights
+        # Propagate preset values to entity nodes, then clean up
         if preset_nodes:
+            propagation_messages = self._propagate_preset_values(preset_nodes)
+            log_messages.extend(propagation_messages)
+
+            removal_messages = self._remove_preset_nodes_from_entity_graph(preset_nodes)
+            log_messages.extend(removal_messages)
+
             cleanup_messages = self._cleanup_unlinked_presets(preset_nodes)
             log_messages.extend(cleanup_messages)
 
-            weight_messages = self._update_weights_from_presets(preset_nodes)
-            log_messages.extend(weight_messages)
-
         return log_messages
 
-    # def _prefill_known_entities(self, known_entities: List[Any]) -> List[str]:
-    #     """预填充已知实体到图中
-
-    #     Args:
-    #         known_entities: 已知实体列表（来自 PatientContext，可以是 KnownEntity 或 dict）
-
-    #     Returns:
-    #         日志消息列表
-    #     """
-    #     log_messages = []
-    #     nodes_added = 0
-
-    #     for entity in known_entities:
-    #         # 处理 KnownEntity dataclass 或 dict
-    #         if hasattr(entity, 'entity_id'):  # KnownEntity dataclass
-    #             entity_id = entity.entity_id
-    #             name = entity.name
-    #             value = entity.value
-    #             original_confidence = entity.original_confidence
-    #             temporal_confidence = entity.temporal_confidence
-    #             source = entity.source
-    #             extracted_at = entity.extracted_at
-    #             metadata = entity.metadata if hasattr(entity, 'metadata') else {}
-    #         else:  # dict
-    #             entity_id = entity.get("entity_id", f"prefill_{nodes_added}")
-    #             name = entity.get("name", "")
-    #             value = entity.get("value", "")
-    #             original_confidence = entity.get("original_confidence", 0.7)
-    #             temporal_confidence = entity.get("temporal_confidence", original_confidence)
-    #             source = entity.get("source", "patient_record")
-    #             extracted_at = entity.get("extracted_at", datetime.now())
-    #             metadata = entity.get("metadata", {})
-
-    #         # 计算状态和不确定性
-    #         if temporal_confidence >= 0.7:
-    #             status = 2
-    #         elif temporal_confidence >= 0.4:
-    #             status = 1
-    #         else:
-    #             status = 0
-
-    #         uncertainty = 1.0 - temporal_confidence
-
-    #         # 构建节点数据
-    #         node_data = {
-    #             "id": entity_id,
-    #             "name": name,
-    #             "description": metadata.get("notes", f"预填充实体: {name}") if isinstance(metadata, dict) else f"预填充实体: {name}",
-    #             "value": value,
-    #             "weight": 1.0,  # 预填充实体默认权重
-    #             "uncertainty": uncertainty,
-    #             "confidential_level": temporal_confidence,  # 使用衰减后的置信度
-    #             "status": status,
-    #             "hit": 1,  # 预填充实体视为已访问
-    #             "community": 0,  # 将在 clustering 中更新
-    #             # 时间属性
-    #             "extracted_at": extracted_at,
-    #             "last_updated_at": extracted_at,
-    #             "source": source,
-    #             "original_confidential_level": original_confidence,
-    #             "temporal_confidence": temporal_confidence,
-    #             "freshness": self.temporal_calculator.calculate_freshness(extracted_at)
-    #         }
-
-    #         # 添加节点到两个图中
-    #         self.entity_graph.add_node(entity_id, **node_data)
-    #         self.relation_graph.add_node(entity_id, **node_data)
-    #         nodes_added += 1
-
-    #     if nodes_added > 0:
-    #         self.logger.info(f"Prefilled {nodes_added} known entities")
-    #         log_messages.append(f"Prefilled {nodes_added} known entities")
-
-    #     return log_messages
 
     def _retrieve_entities(self) -> tuple[list[dict[str, str]], list[str]]:
         """Retrieve entities needed for the target"""
@@ -669,6 +600,199 @@ class EntityGraph:
 
         if removed_count > 0:
             self.logger.info(f"Cleaned up {removed_count} unlinked preset nodes")
+
+        return log_messages
+
+    def _propagate_preset_values(self, preset_nodes: list[dict[str, Any]]) -> list[str]:
+        """
+        Propagate preset metric values to connected entity nodes via LLM.
+
+        Finds entity nodes connected to presets in relation_graph, collects
+        the preset data for each entity, and asks the LLM to decide what
+        value/confidence/weight to write to each entity node.
+
+        Returns:
+            List of log messages.
+        """
+        log_messages = []
+
+        # Step 1: Find preset nodes that have edges in relation_graph
+        linked_preset_ids = set()
+        for preset_node in preset_nodes:
+            node_id = preset_node["id"]
+            if (self.relation_graph.has_node(node_id)
+                    and (self.relation_graph.has_predecessor(node_id)
+                         or self.relation_graph.has_successor(node_id))):
+                    linked_preset_ids.add(node_id)
+
+        if not linked_preset_ids:
+            self.logger.info("No linked preset nodes found for propagation")
+            return log_messages
+
+        # Step 2: Find entity nodes connected to presets in relation_graph
+        entity_ids_with_presets = set()
+        for preset_id in linked_preset_ids:
+            neighbors = set(self.relation_graph.predecessors(preset_id))
+            neighbors.update(self.relation_graph.successors(preset_id))
+            for neighbor_id in neighbors:
+                if (neighbor_id in self.entity_graph
+                        and self.entity_graph.nodes[neighbor_id].get("source") != "preset"):
+                    entity_ids_with_presets.add(neighbor_id)
+
+        if not entity_ids_with_presets:
+            self.logger.info("No entity nodes connected to presets for propagation")
+            return log_messages
+
+        self.logger.info(
+            f"Found {len(entity_ids_with_presets)} entity nodes connected to "
+            f"{len(linked_preset_ids)} preset nodes for propagation"
+        )
+
+        # Step 3: For each entity node, collect connected preset data
+        entity_preset_map: dict[str, list[dict[str, Any]]] = {}
+        for entity_id in entity_ids_with_presets:
+            entity_preset_map[entity_id] = []
+            seen_preset_ids = set()
+            for neighbor_id in list(self.relation_graph.predecessors(entity_id)) + list(self.relation_graph.successors(entity_id)):
+                if neighbor_id in linked_preset_ids and neighbor_id not in seen_preset_ids:
+                    seen_preset_ids.add(neighbor_id)
+                    node_data = self.relation_graph.nodes[neighbor_id]
+                    entity_preset_map[entity_id].append({
+                        "id": neighbor_id,
+                        "name": node_data.get("name", ""),
+                        "description": node_data.get("description", ""),
+                        "value": node_data.get("value", ""),
+                        "metric_name": node_data.get("metric_name", ""),
+                    })
+
+        # Step 4: Batch and call LLM
+        chunk_size = 10
+        entity_ids_list = sorted(entity_ids_with_presets)
+        total_updated = 0
+
+        for i in range(0, len(entity_ids_list), chunk_size):
+            chunk_ids = entity_ids_list[i:i + chunk_size]
+
+            # Format entity nodes section
+            entity_nodes_str = "\n".join([
+                f"node {eid}, {self.entity_graph.nodes[eid]['name']}, "
+                f"description: {self.entity_graph.nodes[eid].get('description', '')}, "
+                f"current weight: {self.entity_graph.nodes[eid].get('weight', 0)}, "
+                f"current uncertainty: {self.entity_graph.nodes[eid].get('uncertainty', 1.0)}"
+                for eid in chunk_ids
+            ])
+
+            # Format preset data section - show connected presets per entity
+            preset_data_lines = []
+            for eid in chunk_ids:
+                presets = entity_preset_map.get(eid, [])
+                if presets:
+                    preset_info = "; ".join([
+                        f"{p['name']}: {p['value']} (metric: {p['metric_name']})"
+                        for p in presets
+                    ])
+                    preset_data_lines.append(
+                        f"  Entity {eid} ({self.entity_graph.nodes[eid]['name']}): [{preset_info}]"
+                    )
+                else:
+                    preset_data_lines.append(f"  Entity {eid}: no preset data connected")
+            preset_data_str = "\n".join(preset_data_lines)
+
+            prompt = self.prompts.get(
+                "PRESET_PROPAGATION",
+                purpose=self.target,
+                entity_nodes=entity_nodes_str,
+                preset_data=preset_data_str,
+            )
+
+            response = self.graph_model.invoke(
+                [SystemMessage(content=prompt)],
+                response_format=PRESET_PROPAGATION_SCHEMA,
+            )
+
+            try:
+                updates = parse_json_response(response.content)
+
+                for update in updates:
+                    node_id = update.get("id")
+                    value = str(update.get("value", "")).strip()
+                    try:
+                        confidential_level = float(update.get("confidential_level", 0.0))
+                    except (ValueError, TypeError):
+                        confidential_level = 0.0
+
+                    if node_id not in self.entity_graph.nodes:
+                        self.logger.warning(f"Propagation: node {node_id} not in entity_graph, skipping")
+                        continue
+
+                    # Only update if LLM provided a non-empty value AND confident enough
+                    if not value or confidential_level <= 0:
+                        continue
+
+                    # Update value and confidential_level
+                    self.entity_graph.nodes[node_id]["value"] = value
+                    self.entity_graph.nodes[node_id]["confidential_level"] = confidential_level
+                    self.entity_graph.nodes[node_id]["last_updated_at"] = datetime.now()
+
+                    # Track original_confidential_level (max)
+                    if "original_confidential_level" not in self.entity_graph.nodes[node_id]:
+                        self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
+                    else:
+                        try:
+                            stored = float(self.entity_graph.nodes[node_id]["original_confidential_level"])
+                        except (ValueError, TypeError):
+                            stored = 0.0
+                        if confidential_level > stored:
+                            self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
+
+                    # Determine status from confidential_level vs threshold
+                    if confidential_level >= self.confidential_threshold:
+                        self.entity_graph.nodes[node_id]["status"] = 2
+                    else:
+                        self.entity_graph.nodes[node_id]["status"] = 1
+
+                    # Apply weight and uncertainty updates
+                    weight = update.get("weight")
+                    if weight is not None:
+                        with contextlib.suppress(ValueError, TypeError):
+                            self.entity_graph.nodes[node_id]["weight"] = float(weight)
+
+                    uncertainty = update.get("uncertainty")
+                    if uncertainty is not None:
+                        with contextlib.suppress(ValueError, TypeError):
+                            self.entity_graph.nodes[node_id]["uncertainty"] = float(uncertainty)
+
+                    total_updated += 1
+                    self.logger.info(
+                        f"Propagated to node {node_id}: value={value[:50]}, "
+                        f"cl={confidential_level:.2f}, reason={update.get('update_reason', 'N/A')}"
+                    )
+
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Failed to parse preset propagation response: {e}")
+
+        self.logger.info(f"Preset propagation complete: {total_updated}/{len(entity_ids_with_presets)} entity nodes updated")
+        return log_messages
+
+    def _remove_preset_nodes_from_entity_graph(self, preset_nodes: list[dict[str, Any]]) -> list[str]:
+        """
+        Remove all preset nodes from entity_graph after value propagation.
+
+        Preset nodes remain in relation_graph for PageRank/community detection,
+        but are removed from entity_graph so they don't appear in reports or
+        hint selection.
+        """
+        log_messages = []
+        removed_count = 0
+
+        for preset_node in preset_nodes:
+            node_id = preset_node["id"]
+            if self.entity_graph.has_node(node_id):
+                self.entity_graph.remove_node(node_id)
+                removed_count += 1
+
+        if removed_count > 0:
+            self.logger.info(f"Removed {removed_count} preset nodes from entity_graph (kept in relation_graph)")
 
         return log_messages
 
@@ -1376,7 +1500,9 @@ class EntityGraph:
         serialized_nodes = []
         serialize_keys = ["name", "description", "value"]
 
-        for node, attrs in graph.nodes(data=True):
+        for _node, attrs in graph.nodes(data=True):
+            if attrs.get("source") == "preset":
+                continue
             if attrs.get("value"):
                 attr_str = ", ".join(f"{key}: {attrs.get(key, '')}" for key in serialize_keys)
                 if attrs.get("status", 0) == 1:

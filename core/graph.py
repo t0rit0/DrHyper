@@ -586,9 +586,12 @@ class EntityGraph:
         for preset_node in preset_nodes:
             node_id = preset_node["id"]
 
+            if not self.relation_graph.has_node(node_id):
+                continue
+
             has_edges = (
-                self.relation_graph.has_predecessor(node_id)
-                or self.relation_graph.has_successor(node_id)
+                len(list(self.relation_graph.predecessors(node_id))) > 0
+                or len(list(self.relation_graph.successors(node_id))) > 0
             )
 
             if not has_edges:
@@ -611,6 +614,8 @@ class EntityGraph:
         the preset data for each entity, and asks the LLM to decide what
         value/confidence/weight to write to each entity node.
 
+        Each entity is processed in parallel using ThreadPoolExecutor.
+
         Returns:
             List of log messages.
         """
@@ -621,8 +626,8 @@ class EntityGraph:
         for preset_node in preset_nodes:
             node_id = preset_node["id"]
             if (self.relation_graph.has_node(node_id)
-                    and (self.relation_graph.has_predecessor(node_id)
-                         or self.relation_graph.has_successor(node_id))):
+                    and (len(list(self.relation_graph.predecessors(node_id))) > 0
+                         or len(list(self.relation_graph.successors(node_id))) > 0)):
                     linked_preset_ids.add(node_id)
 
         if not linked_preset_ids:
@@ -665,114 +670,134 @@ class EntityGraph:
                         "metric_name": node_data.get("metric_name", ""),
                     })
 
-        # Step 4: Batch and call LLM
-        chunk_size = 10
+        # Step 4: Process each entity in parallel
         entity_ids_list = sorted(entity_ids_with_presets)
-        total_updated = 0
 
-        for i in range(0, len(entity_ids_list), chunk_size):
-            chunk_ids = entity_ids_list[i:i + chunk_size]
+        with ThreadPoolExecutor(max_workers=min(len(entity_ids_list), 4)) as executor:
+            futures = {
+                executor.submit(
+                    self._propagate_single_entity,
+                    eid,
+                    entity_preset_map.get(eid, []),
+                ): eid
+                for eid in entity_ids_list
+            }
 
-            # Format entity nodes section
-            entity_nodes_str = "\n".join([
-                f"node {eid}, {self.entity_graph.nodes[eid]['name']}, "
-                f"description: {self.entity_graph.nodes[eid].get('description', '')}, "
-                f"current weight: {self.entity_graph.nodes[eid].get('weight', 0)}, "
-                f"current uncertainty: {self.entity_graph.nodes[eid].get('uncertainty', 1.0)}"
-                for eid in chunk_ids
-            ])
+            for future in as_completed(futures):
+                eid = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    self.logger.error(f"Failed to propagate to entity {eid}: {e}")
 
-            # Format preset data section - show connected presets per entity
-            preset_data_lines = []
-            for eid in chunk_ids:
-                presets = entity_preset_map.get(eid, [])
-                if presets:
-                    preset_info = "; ".join([
-                        f"{p['name']}: {p['value']} (metric: {p['metric_name']})"
-                        for p in presets
-                    ])
-                    preset_data_lines.append(
-                        f"  Entity {eid} ({self.entity_graph.nodes[eid]['name']}): [{preset_info}]"
-                    )
-                else:
-                    preset_data_lines.append(f"  Entity {eid}: no preset data connected")
-            preset_data_str = "\n".join(preset_data_lines)
-
-            prompt = self.prompts.get(
-                "PRESET_PROPAGATION",
-                purpose=self.target,
-                entity_nodes=entity_nodes_str,
-                preset_data=preset_data_str,
-            )
-
-            response = self.graph_model.invoke(
-                [SystemMessage(content=prompt)],
-                response_format=PRESET_PROPAGATION_SCHEMA,
-            )
-
-            try:
-                updates = parse_json_response(response.content)
-
-                for update in updates:
-                    node_id = update.get("id")
-                    value = str(update.get("value", "")).strip()
-                    try:
-                        confidential_level = float(update.get("confidential_level", 0.0))
-                    except (ValueError, TypeError):
-                        confidential_level = 0.0
-
-                    if node_id not in self.entity_graph.nodes:
-                        self.logger.warning(f"Propagation: node {node_id} not in entity_graph, skipping")
-                        continue
-
-                    # Only update if LLM provided a non-empty value AND confident enough
-                    if not value or confidential_level <= 0:
-                        continue
-
-                    # Update value and confidential_level
-                    self.entity_graph.nodes[node_id]["value"] = value
-                    self.entity_graph.nodes[node_id]["confidential_level"] = confidential_level
-                    self.entity_graph.nodes[node_id]["last_updated_at"] = datetime.now()
-
-                    # Track original_confidential_level (max)
-                    if "original_confidential_level" not in self.entity_graph.nodes[node_id]:
-                        self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
-                    else:
-                        try:
-                            stored = float(self.entity_graph.nodes[node_id]["original_confidential_level"])
-                        except (ValueError, TypeError):
-                            stored = 0.0
-                        if confidential_level > stored:
-                            self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
-
-                    # Determine status from confidential_level vs threshold
-                    if confidential_level >= self.confidential_threshold:
-                        self.entity_graph.nodes[node_id]["status"] = 2
-                    else:
-                        self.entity_graph.nodes[node_id]["status"] = 1
-
-                    # Apply weight and uncertainty updates
-                    weight = update.get("weight")
-                    if weight is not None:
-                        with contextlib.suppress(ValueError, TypeError):
-                            self.entity_graph.nodes[node_id]["weight"] = float(weight)
-
-                    uncertainty = update.get("uncertainty")
-                    if uncertainty is not None:
-                        with contextlib.suppress(ValueError, TypeError):
-                            self.entity_graph.nodes[node_id]["uncertainty"] = float(uncertainty)
-
-                    total_updated += 1
-                    self.logger.info(
-                        f"Propagated to node {node_id}: value={value[:50]}, "
-                        f"cl={confidential_level:.2f}, reason={update.get('update_reason', 'N/A')}"
-                    )
-
-            except json.JSONDecodeError as e:
-                self.logger.error(f"Failed to parse preset propagation response: {e}")
-
+        # Count updated nodes
+        total_updated = sum(
+            1 for nid in entity_ids_with_presets
+            if self.entity_graph.nodes[nid].get("value")
+            and self.entity_graph.nodes[nid].get("source") != "preset"
+        )
         self.logger.info(f"Preset propagation complete: {total_updated}/{len(entity_ids_with_presets)} entity nodes updated")
         return log_messages
+
+    def _propagate_single_entity(
+        self,
+        entity_id: str,
+        connected_presets: list[dict[str, Any]],
+    ) -> None:
+        """
+        Process a single entity node: call LLM to decide value from presets,
+        then apply the update to entity_graph.
+
+        Args:
+            entity_id: The entity node ID.
+            connected_presets: List of preset node data dicts connected to this entity.
+        """
+        entity_data = self.entity_graph.nodes[entity_id]
+
+        # Format entity info
+        entity_nodes_str = (
+            f"node {entity_id}, {entity_data['name']}, "
+            f"description: {entity_data.get('description', '')}, "
+            f"current weight: {entity_data.get('weight', 0)}, "
+            f"current uncertainty: {entity_data.get('uncertainty', 1.0)}"
+        )
+
+        # Format connected preset data
+        if connected_presets:
+            preset_info = "; ".join([
+                f"{p['name']}: {p['value']} (metric: {p['metric_name']})"
+                for p in connected_presets
+            ])
+            preset_data_str = f"  Entity {entity_id} ({entity_data['name']}): [{preset_info}]"
+        else:
+            preset_data_str = f"  Entity {entity_id}: no preset data connected"
+
+        prompt = self.prompts.get(
+            "PRESET_PROPAGATION",
+            purpose=self.target,
+            entity_nodes=entity_nodes_str,
+            preset_data=preset_data_str,
+        )
+
+        response = self.graph_model.invoke(
+            [SystemMessage(content=prompt)],
+            response_format=PRESET_PROPAGATION_SCHEMA,
+        )
+
+        try:
+            updates = parse_json_response(response.content)
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse propagation response for {entity_id}: {e}")
+            return
+
+        for update in updates:
+            node_id = update.get("id")
+            value = str(update.get("value", "")).strip()
+            try:
+                confidential_level = float(update.get("confidential_level", 0.0))
+            except (ValueError, TypeError):
+                confidential_level = 0.0
+
+            if node_id not in self.entity_graph.nodes:
+                self.logger.warning(f"Propagation: node {node_id} not in entity_graph, skipping")
+                continue
+
+            if not value or confidential_level <= 0:
+                continue
+
+            self.entity_graph.nodes[node_id]["value"] = value
+            self.entity_graph.nodes[node_id]["confidential_level"] = confidential_level
+            self.entity_graph.nodes[node_id]["last_updated_at"] = datetime.now()
+
+            if "original_confidential_level" not in self.entity_graph.nodes[node_id]:
+                self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
+            else:
+                try:
+                    stored = float(self.entity_graph.nodes[node_id]["original_confidential_level"])
+                except (ValueError, TypeError):
+                    stored = 0.0
+                if confidential_level > stored:
+                    self.entity_graph.nodes[node_id]["original_confidential_level"] = confidential_level
+
+            if confidential_level >= self.confidential_threshold:
+                self.entity_graph.nodes[node_id]["status"] = 2
+            else:
+                self.entity_graph.nodes[node_id]["status"] = 1
+
+            weight = update.get("weight")
+            if weight is not None:
+                with contextlib.suppress(ValueError, TypeError):
+                    self.entity_graph.nodes[node_id]["weight"] = float(weight)
+
+            uncertainty = update.get("uncertainty")
+            if uncertainty is not None:
+                with contextlib.suppress(ValueError, TypeError):
+                    self.entity_graph.nodes[node_id]["uncertainty"] = float(uncertainty)
+
+            self.logger.info(
+                f"Propagated to node {node_id}: value={value[:50]}, "
+                f"cl={confidential_level:.2f}, reason={update.get('update_reason', 'N/A')}"
+            )
 
     def _remove_preset_nodes_from_entity_graph(self, preset_nodes: list[dict[str, Any]]) -> list[str]:
         """
@@ -810,8 +835,8 @@ class EntityGraph:
             node_id = preset_node["id"]
             if self.relation_graph.has_node(node_id):
                 has_edges = (
-                    self.relation_graph.has_predecessor(node_id)
-                    or self.relation_graph.has_successor(node_id)
+                    len(list(self.relation_graph.predecessors(node_id))) > 0
+                    or len(list(self.relation_graph.successors(node_id))) > 0
                 )
                 if has_edges and preset_node.get("status", 0) > 0:
                     active_ids.append(node_id)
@@ -839,7 +864,8 @@ class EntityGraph:
             node_count = 0
             for node in self.relation_graph.nodes():
                 self.relation_graph.nodes[node]["community"] = 0
-                self.entity_graph.nodes[node]["community"] = 0
+                if node in self.entity_graph:
+                    self.entity_graph.nodes[node]["community"] = 0
                 node_count += 1
 
             self.logger.info(f"Assigned {node_count} nodes to default community 0")
@@ -876,7 +902,8 @@ class EntityGraph:
             for vid in community:
                 node_name = ig_g.vs[vid]["name"]
                 self.relation_graph.nodes[node_name]["community"] = comm_id
-                self.entity_graph.nodes[node_name]["community"] = comm_id
+                if node_name in self.entity_graph:
+                    self.entity_graph.nodes[node_name]["community"] = comm_id
 
                 if comm_id not in community_counts:
                     community_counts[comm_id] = 0

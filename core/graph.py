@@ -355,6 +355,28 @@ class EntityGraph:
         self.logger.info(f"Initialized attributes for chunk {chunk_index + 1}/{total_chunks}")
         return chunk_nodes
 
+    @staticmethod
+    def _ensure_numeric_fields(node: dict[str, Any]) -> dict[str, Any]:
+        """Convert numeric fields from LLM JSON responses to proper Python types.
+
+        LLM responses may return numeric values as strings (e.g. "0.8" instead of 0.8).
+        This ensures consistency and prevents numpy/math errors downstream.
+        """
+        float_fields = ("weight", "uncertainty", "confidential_level", "relevance")
+        int_fields = ("hit", "community", "status")
+
+        for field in float_fields:
+            if field in node:
+                with contextlib.suppress(ValueError, TypeError):
+                    node[field] = float(node[field])
+
+        for field in int_fields:
+            if field in node:
+                with contextlib.suppress(ValueError, TypeError):
+                    node[field] = int(node[field])
+
+        return node
+
     def _initialize_entity_attributes(
         self, entities: list[dict[str, str]], patient_text_records: dict[str, str] | None = None
     ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -365,7 +387,7 @@ class EntityGraph:
             patient_text_records: Optional patient text records for context
         """
         log_messages = []
-        chunk_size = 10
+        chunk_size = 5
 
         # 格式化患者文本记录为上下文字符串
         patient_context_str = ""
@@ -401,6 +423,7 @@ class EntityGraph:
         # 为每个节点添加时间属性
         now = datetime.now()
         for node in nodes:
+            self._ensure_numeric_fields(node)
             node["extracted_at"] = now
             node["last_updated_at"] = now
             node["source"] = "conversation"
@@ -503,6 +526,7 @@ class EntityGraph:
         for node in nodes:
             node_id = node.get("id")
             if node_id:
+                self._ensure_numeric_fields(node)
                 G.add_node(node_id, **node)
                 node_count += 1
 
@@ -531,6 +555,7 @@ class EntityGraph:
         for node in nodes:
             node_id = node.get("id")
             if node_id and node_id not in graph:
+                self._ensure_numeric_fields(node)
                 graph.add_node(node_id, **node)
                 node_count += 1
 
@@ -1118,9 +1143,9 @@ class EntityGraph:
         weights, entropies, topologies, communities = [], [], [], []
 
         for nid, data in available_nodes:
-            weights.append(data.get("weight", 0.0))
-            entropies.append(data.get("uncertainty", 1.0))
-            topologies.append(pr.get(nid, 0))
+            weights.append(float(data.get("weight", 0.0)))
+            entropies.append(float(data.get("uncertainty", 1.0)))
+            topologies.append(float(pr.get(nid, 0)))
 
             if self.prev_node is None:
                 communities.append(0.0)
@@ -1405,8 +1430,8 @@ class EntityGraph:
                 "name": name,
                 "description": entry.get("description", ""),
                 "value": value,
-                "weight": entry.get("weight", 1.0),
-                "uncertainty": entry.get("uncertainty", 1.0),
+                "weight": weight,
+                "uncertainty": uncertainty,
                 "confidential_level": confidential_level,
                 "status": status,
                 "hit": 1,
@@ -1494,8 +1519,10 @@ class EntityGraph:
                 for update in updates:
                     node_id = update.get("id")
                     if node_id in self.entity_graph.nodes:
-                        self.entity_graph.nodes[node_id]["weight"] = update.get("weight", self.entity_graph.nodes[node_id]["weight"])
-                        self.entity_graph.nodes[node_id]["uncertainty"] = update.get("uncertainty", self.entity_graph.nodes[node_id]["uncertainty"])
+                        with contextlib.suppress(ValueError, TypeError):
+                            self.entity_graph.nodes[node_id]["weight"] = float(update.get("weight", self.entity_graph.nodes[node_id]["weight"]))
+                        with contextlib.suppress(ValueError, TypeError):
+                            self.entity_graph.nodes[node_id]["uncertainty"] = float(update.get("uncertainty", self.entity_graph.nodes[node_id]["uncertainty"]))
 
                         update_count += 1
                         self.logger.info(f"Updated node {node_id}: {update.get('update_reason', 'No reason')}")
@@ -1870,7 +1897,7 @@ class EntityGraph:
         # Get high-weight nodes
         important_nodes = []
         for node_id, data in self.entity_graph.nodes(data=True):
-            if data.get("weight", 0) >= 0.8:
+            if float(data.get("weight", 0)) >= 0.8:
                 important_nodes.append(f"{node_id}: {data['name']} (weight={data['weight']})")
 
         summary = f"Total nodes: {total_nodes}, Total edges: {total_edges}\n"

@@ -309,13 +309,22 @@ def load_chat_model(provider: str,
                     device: str = "auto") -> BaseChatModel:
     """Load a chat model by its fully specified name
     """
-    if provider == "custom": 
+    if provider == "custom":
         return CustomChatModel(
             model_name=model_name,
             api_key=api_key,
             base_url=base_url,
             temperature=temperature,
             max_tokens=max_tokens
+        )
+    elif provider == "openai":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
     elif provider == "local":
         return LocalChatModel(

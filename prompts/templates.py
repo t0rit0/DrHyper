@@ -307,7 +307,7 @@ Given a specific purpose, analyze it thoroughly and identify all information ent
 
 GUIDELINES:
 - Entities must be specific and detailed (e.g., "patient age" instead of "medical condition")
-- Provide as many relevant entities as possible
+- Provide at most 15 relevant entities, focusing on the most critical ones for the purpose
 - Entities should have finite, calculable answer pools to enable uncertainty measurement
 - Split broad concepts into specific components (e.g., "drinking habits" → "alcohol consumption" and "drinking frequency")
 - Prioritize entities by importance, listing the most critical information first
